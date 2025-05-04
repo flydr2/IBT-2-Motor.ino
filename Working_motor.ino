@@ -4,9 +4,9 @@
 // Pin definitions
 #define RPWM 9
 #define LPWM 10
-#define REN 4
+#define REN 4 // for now these are wired to 5v
 #define LEN 3
-#define L_IS A1
+#define L_IS A1 // not up to the right amps
 #define R_IS A1
 
 // Command and telemetry codes
