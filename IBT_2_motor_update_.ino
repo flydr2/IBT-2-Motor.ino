@@ -63,7 +63,7 @@ void stopMotor() {
   analogWrite(RPWM, 0);
   analogWrite(LPWM, 0);
   speed = 1000;
-          motorEngaged = false;
+  motorEngaged = false;
   debugLog("Motor stopped");
 }
 
@@ -174,150 +174,153 @@ void parseCommand(uint8_t *command) {
   }
 
   switch (cmd) {
-switch (cmd) {
-    case DISENGAGE_CODE:
-      digitalWrite(REN, LOW); // Set REN to LOW
-      stopMotor();
-      break;
-
-    case ENGAGE_CODE:
-      digitalWrite(REN, HIGH); // Set REN to HIGH
-      motorEngaged = true;     // Optionally set motorEngaged to true
-      break;
-
-
-    case COMMAND_CODE: // Includes speed and direction control
-      setMotorSpeed(value);
-      break;
-
-    case MAX_CONTROLLER_TEMP_CODE:
-      if (debugMode) {
-        Serial.print("Max controller temperature set to: ");
-        Serial.println(value);
-      }
-      break;
-
-    case MAX_CURRENT_CODE:// current in units of 10mA
-      currentLimit = value;
-      if (debugMode) {
-        Serial.print("Max current set to: ");
-        Serial.println(currentLimit);
-      }
-      break;
-
-    case MAX_MOTOR_TEMP_CODE: //not used here
-      maxMotorTemp = value;
-      //      if (debugMode) {
-      //        Serial.print("Max motor temperature set to: ");
-      //        Serial.println(maxMotorTemp);
-      //      }
-      break;
-
-    case RUDDER_MIN_CODE:
-      rudderMin = value;
-      if (debugMode) {
-        Serial.print("Rudder minimum set to: ");
-        Serial.println(rudderMin);
-      }
-      break;
-
-    case RUDDER_MAX_CODE:
-      rudderMax = value;
-      if (debugMode) {
-        Serial.print("Rudder maximum set to: ");
-        Serial.println(rudderMax);
-      }
-      break;
-
-    case MAX_SLEW_CODE:
-      maxSlewRate = value;
-      if (debugMode) {
-        Serial.print("Max slew rate set to: ");
-        Serial.println(maxSlewRate);
-      }
-      break;
-
-    case EEPROM_READ_CODE: //not used here
-      //      if (debugMode) {
-      //        Serial.print("EEPROM read request received for address: ");
-      //        Serial.println(value);
-      //      }
-      //      // Add EEPROM read functionality here
-      break;
-
-    default:
-      if (debugMode) {
-        Serial.print("........................Unknown command received: ");
-        Serial.println(cmd, HEX);
-      }
-      break;
-  }
-}
-
-bool verifyCRC(uint8_t *data) {
-  uint8_t crc = crc8(data, 3);
-  return crc == data[3];
-}
-
-void setup() {
-  Serial.begin(115200);
-  Serial1.begin(38400);
-
-  pinMode(RPWM, OUTPUT);
-  pinMode(LPWM, OUTPUT);
-  pinMode(REN, OUTPUT);
-
-  pinMode(L_IS, INPUT);
-  pinMode(R_IS, INPUT);
-  speed = 1000;
+      switch (cmd) {
+        case DISENGAGE_CODE:
+          digitalWrite(REN, LOW); // Set REN to LOW
           stopMotor();
-  digitalWrite(REN, HIGH);
+          break;
+
+        case ENGAGE_CODE:
+          digitalWrite(REN, HIGH); // Set REN to HIGH
+          motorEngaged = true;     // Optionally set motorEngaged to true
+          break;
 
 
-  Serial.println("Arduino motor controller initialized");
+        case COMMAND_CODE: // Includes speed and direction control
+          setMotorSpeed(value);
+          break;
 
+        case MAX_CONTROLLER_TEMP_CODE:
+          if (debugMode) {
+            Serial.print("Max controller temperature set to: ");
+            Serial.println(value);
+          }
+          break;
 
+        case MAX_CURRENT_CODE: // Current in units of 10mA
+          currentLimit = value;
+          if (debugMode) {
+            Serial.print("Max current set to: ");
+            Serial.println(currentLimit);
+          }
+          break;
 
-  // Send initial handshake for Pypilot detection
-  sendHandshake();
-}
+        case MAX_MOTOR_TEMP_CODE: //not used here
+          maxMotorTemp = value;
+          //      if (debugMode) {
+          //        Serial.print("Max motor temperature set to: ");
+          //        Serial.println(maxMotorTemp);
+          //      }
+          break;
 
-void loop() {
-  static uint8_t buffer[4];
-  static uint8_t bufferIndex = 0;
+        case RUDDER_MIN_CODE:
+          rudderMin = value;
+          if (debugMode) {
+            Serial.print("Rudder minimum set to: ");
+            Serial.println(rudderMin);
+          }
+          break;
 
-  while (Serial1.available() > 0) {
-    uint8_t receivedByte = Serial1.read();
-    buffer[bufferIndex++] = receivedByte;
+        case RUDDER_MAX_CODE:
+          rudderMax = value;
+          if (debugMode) {
+            Serial.print("Rudder maximum set to: ");
+            Serial.println(rudderMax);
+          }
+          break;
 
-    if (bufferIndex == 4) {
-      if (verifyCRC(buffer)) {
-        parseCommand(buffer);
-      } else {
-        Serial.println("Invalid CRC received");
+        case MAX_SLEW_CODE:
+          maxSlewRate = value;
+          if (debugMode) {
+            Serial.print("Max slew rate set to: ");
+            Serial.println(maxSlewRate);
+          }
+          break;
+
+        case EEPROM_READ_CODE: //not used here
+          //      if (debugMode) {
+          //        Serial.print("EEPROM read request received for address: ");
+          //        Serial.println(value);
+          //      }
+          //      // Add EEPROM read functionality here
+          break;
+
+        default:
+          if (debugMode) {
+            Serial.print("........................Unknown command received: ");
+            Serial.println(cmd, HEX);
+          }
+          break;
       }
-      bufferIndex = 0;
+  }
+
+  bool verifyCRC(uint8_t *data) {
+    uint8_t crc = crc8(data, 3);
+    return crc == data[3];
+  }
+
+  void setup() {
+    Serial.begin(115200);
+    Serial1.begin(38400);
+
+    pinMode(RPWM, OUTPUT);
+    pinMode(LPWM, OUTPUT);
+    pinMode(REN, OUTPUT);
+
+    pinMode(L_IS, INPUT);
+    pinMode(R_IS, INPUT);
+    speed = 1000;
+    stopMotor();
+    digitalWrite(REN, HIGH);
+
+
+    Serial.println("Arduino motor controller initialized");
+
+
+
+    // Send initial handshake for Pypilot detection
+    sendHandshake();
+  }
+
+  void loop() {
+    static uint8_t buffer[4];
+    static uint8_t bufferIndex = 0;
+
+    while (Serial1.available() > 0) {
+      uint8_t receivedByte = Serial1.read();
+      buffer[bufferIndex++] = receivedByte;
+
+      if (bufferIndex == 4) {
+        if (verifyCRC(buffer)) {
+          parseCommand(buffer);
+        } else {
+          Serial.println("Invalid CRC received");
+        }
+        bufferIndex = 0;
+      }
+    }
+
+    int currentSenseRaw = analogRead(L_IS);
+    currentAmps = floatMap(currentSenseRaw, 0, 1023, 0, 1500);// 15A to be determined. Must read the datasheet
+    if (currentAmps > currentLimit) {
+      stopMotor();
+      Serial.println("Motor stopped due to overcurrent!");
+    }
+
+
+    static unsigned long lastFeedbackTime = 0;
+    static unsigned long lastHandshakeTime = 0;
+    unsigned long currentMillis = millis();
+
+    // Send telemetry feedback every 100ms
+    if (currentMillis - lastFeedbackTime > 100) {
+      sendFeedback();
+      lastFeedbackTime = currentMillis;
+    }
+
+    // Send handshake every 1000ms to ensure detection
+    if (currentMillis - lastHandshakeTime > 1000) {
+      sendHandshake();
+      lastHandshakeTime = currentMillis;
     }
   }
-
-  int currentSenseRaw = analogRead(L_IS);
-  currentAmps = floatMap(currentSenseRaw, 0, 1023, 0, 1500);// 15A to be determined. Must read the datasheet
-
-
-
-  static unsigned long lastFeedbackTime = 0;
-  static unsigned long lastHandshakeTime = 0;
-  unsigned long currentMillis = millis();
-
-  // Send telemetry feedback every 100ms
-  if (currentMillis - lastFeedbackTime > 100) {
-    sendFeedback();
-    lastFeedbackTime = currentMillis;
-  }
-
-  // Send handshake every 1000ms to ensure detection
-  if (currentMillis - lastHandshakeTime > 1000) {
-    sendHandshake();
-    lastHandshakeTime = currentMillis;
-  }
-}
