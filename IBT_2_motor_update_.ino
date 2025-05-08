@@ -220,27 +220,15 @@ void sendFeedback() {
 }
 
 void sendHandshake() {
-    uint8_t handshake[8];
-    handshake[0] = HANDSHAKE_CODE;
-    handshake[1] = DEVICE_ID;           // Unique ID
-    handshake[2] = DEVICE_TYPE;         // Type of device
-    handshake[3] = HARDWARE_VERSION;    // Hardware version
-    handshake[4] = MAX_CURRENT_CAP;     // Max current capability
-    handshake[5] = VOLTAGE_RANGE;       // Voltage range
-    handshake[6] = 0x00;                // Reserved byte
-    handshake[7] = crc8(handshake, 7);  // Calculate CRC
+    uint8_t handshake[4];
+    handshake[0] = HANDSHAKE_CODE;   // Handshake code (e.g., 0x5A)
+    handshake[1] = 0x00;            // Reserved byte
+    handshake[2] = 0x00;            // Reserved byte
+    handshake[3] = crc8(handshake, 3); // Calculate CRC for the first 3 bytes
 
-    Serial1.write(handshake, 8); // Send handshake packet
-
-    if (debugMode) {
-        Serial.print("Sent enhanced handshake: ");
-        for (int i = 0; i < 8; i++) {
-            Serial.print(handshake[i], HEX);
-            Serial.print(" ");
-        }
-        Serial.println();
-    }
+    Serial1.write(handshake, 4);    // Send the 4-byte handshake packet
 }
+
 
 void parseCommand(uint8_t *command) {
   uint8_t cmd = command[0];
@@ -338,10 +326,10 @@ case MAX_SLEW_CODE:
 
       
       if (debugMode) {
-        Serial.print("Max slew rate set to: ");
-        Serial.println(maxSlewRate);
-        Serial.print("Max slew SLOW set to: ");
-        Serial.println(max_slew_slow);
+//        Serial.print("Max slew rate set to: ");
+//        Serial.println(maxSlewRate);
+//        Serial.print("Max slew SLOW set to: ");
+//        Serial.println(max_slew_slow);
 
       }
       break;
