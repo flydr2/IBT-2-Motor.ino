@@ -1,5 +1,5 @@
 
-//THIS FILE WILL BE CHANGED PERIODICALY I'M WORKING ON IT ... IT WILL EVENTUALLY REPLACE THE WORKING ONE
+
 
 #include <Arduino.h>
 #include "crc.h" // Ensure crc.h is available for CRC calculations
@@ -184,9 +184,6 @@ void parseCommand(uint8_t *command) {
       if (debugMode) {
         Serial.print("DISENGAGE CODE: ");
         Serial.println(value);
-        Serial.print("ENGAGE CODE: ");
-        Serial.println(value);
-
       }
 
       break;
@@ -196,11 +193,8 @@ void parseCommand(uint8_t *command) {
       if (debugMode) {
         Serial.print("ENGAGE CODE: ");
         Serial.println(value);
-        Serial.print("DISENGAGE CODE: ");
-        Serial.println(value);
-
       }
-
+      break;
 
     case COMMAND_CODE: // Includes speed and direction control
       setMotorSpeed(value);
