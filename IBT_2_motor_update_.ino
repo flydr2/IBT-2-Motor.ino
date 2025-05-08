@@ -42,8 +42,15 @@
 #define RESET_CODE 0xE7
 #define REPROGRAM_CODE 0x19
 #define EEPROM_VALUE_CODE 0x9a
+
 // Handshake and telemetry codes for Pypilot detection
 #define HANDSHAKE_CODE 0x5A
+#define DEVICE_ID 0x01 // Unique identifier for this device
+#define DEVICE_TYPE 0x02 // Example: 0x02 for motor controllers
+#define FIRMWARE_VERSION 0x0101 // Firmware version 1.01
+#define MAX_CURRENT_CAP 50 // Max current in Amps
+#define VOLTAGE_RANGE 12 // Max voltage range in Volts
+#define HARDWARE_VERSION 0x01 // Example: Version 1.0
 
 // Global variables
 int speed = 1000;
@@ -213,22 +220,26 @@ void sendFeedback() {
 }
 
 void sendHandshake() {
-  uint8_t handshake[4];
-  handshake[0] = HANDSHAKE_CODE;
-  handshake[1] = 0x00; // Reserved byte
-  handshake[2] = 0x00; // Reserved byte
-  handshake[3] = crc8(handshake, 3); // Calculate CRC
+    uint8_t handshake[8];
+    handshake[0] = HANDSHAKE_CODE;
+    handshake[1] = DEVICE_ID;           // Unique ID
+    handshake[2] = DEVICE_TYPE;         // Type of device
+    handshake[3] = HARDWARE_VERSION;    // Hardware version
+    handshake[4] = MAX_CURRENT_CAP;     // Max current capability
+    handshake[5] = VOLTAGE_RANGE;       // Voltage range
+    handshake[6] = 0x00;                // Reserved byte
+    handshake[7] = crc8(handshake, 7);  // Calculate CRC
 
-  Serial1.write(handshake, 4); // Send handshake packet
+    Serial1.write(handshake, 8); // Send handshake packet
 
-  if (debugMode) {
-    Serial.print("Sent handshake: ");
-    for (int i = 0; i < 4; i++) {
-      Serial.print(handshake[i], HEX);
-      Serial.print(" ");
+    if (debugMode) {
+        Serial.print("Sent enhanced handshake: ");
+        for (int i = 0; i < 8; i++) {
+            Serial.print(handshake[i], HEX);
+            Serial.print(" ");
+        }
+        Serial.println();
     }
-    Serial.println();
-  }
 }
 
 void parseCommand(uint8_t *command) {
