@@ -1,5 +1,12 @@
 // I'm currently working on this draft... Not ready for use
 
+//The enum are for my references
+enum commands {COMMAND_CODE=0xc7, RESET_CODE=0xe7, MAX_CURRENT_CODE=0x1e, MAX_CONTROLLER_TEMP_CODE=0xa4, MAX_MOTOR_TEMP_CODE=0x5a, RUDDER_RANGE_CODE=0xb6, RUDDER_MIN_CODE=0x2b, RUDDER_MAX_CODE=0x4d, REPROGRAM_CODE=0x19, DISENGAGE_CODE=0x68, MAX_SLEW_CODE=0x71, EEPROM_READ_CODE=0x91, EEPROM_WRITE_CODE=0x53, CLUTCH_PWM_AND_BRAKE_CODE=0x36};
+
+enum results {CURRENT_CODE=0x1c, VOLTAGE_CODE=0xb3, CONTROLLER_TEMP_CODE=0xf9, MOTOR_TEMP_CODE=0x48, RUDDER_SENSE_CODE=0xa7, FLAGS_CODE=0x8f, EEPROM_VALUE_CODE=0x9a};
+
+enum {SYNC=1, OVERTEMP_FAULT=2, OVERCURRENT_FAULT=4, ENGAGED=8, INVALID=16, PORT_PIN_FAULT=32, STARBOARD_PIN_FAULT=64, BADVOLTAGE_FAULT=128, MIN_RUDDER_FAULT=256, MAX_RUDDER_FAULT=512, CURRENT_RANGE=1024, BAD_FUSES=2048, /* PORT_FAULT=4096  STARBOARD_FAULT=8192 */ REBOOTED=32768};
+
 
 #include <Arduino.h>
 #include "crc.h" // Ensure crc.h is available for CRC calculations
@@ -199,10 +206,10 @@ void parseCommand(uint8_t *command) {
 
     case COMMAND_CODE: // Includes speed and direction control
       setMotorSpeed(value);
-        if (debugMode) {
-      Serial.print("MOTOR SPEED CODE: ");
-      Serial.println(value);
-          }
+      if (debugMode) {
+        Serial.print("MOTOR SPEED CODE: ");
+        Serial.println(value);
+      }
       break;
 
     case MAX_CONTROLLER_TEMP_CODE:
@@ -214,12 +221,12 @@ void parseCommand(uint8_t *command) {
 
     case MAX_CURRENT_CODE:// current in units of 10mA
       currentLimit = value;
-      //  if (debugMode) {
-      Serial.print("Max current set to: ");
-      Serial.println(currentLimit);
-      Serial.print("Max current: ");
-      Serial.println(currentAmps);
-      //   }
+      if (debugMode) {
+        Serial.print("Max current set to: ");
+        Serial.println(currentLimit);
+        Serial.print("Max current: ");
+        Serial.println(currentAmps);
+      }
       break;
 
     case MAX_MOTOR_TEMP_CODE: //not used here
@@ -300,56 +307,61 @@ void setup() {
 }
 
 void loop() {
-    static uint8_t buffer[4];
-    static uint8_t bufferIndex = 0;
+  static uint8_t buffer[4];
+  static uint8_t bufferIndex = 0;
 
-    while (Serial1.available() > 0) {
-        uint8_t receivedByte = Serial1.read();
-        buffer[bufferIndex++] = receivedByte;
+  while (Serial1.available() > 0) {
+    uint8_t receivedByte = Serial1.read();
+    buffer[bufferIndex++] = receivedByte;
 
-        if (bufferIndex == 4) {
-            if (verifyCRC(buffer)) {
-                parseCommand(buffer);
-            } else {
-                Serial.println("Invalid CRC received");
-            }
-            bufferIndex = 0;
-        }
+    if (bufferIndex == 4) {
+      if (verifyCRC(buffer)) {
+        parseCommand(buffer);
+      } else {
+        Serial.println("Invalid CRC received");
+      }
+      bufferIndex = 0;
     }
+  }
 
-    // Read the current sense value
-    int currentSenseRaw = analogRead(IS_PINS);
-    currentAmps = floatMap(currentSenseRaw, 0, 1023, 0, 5000); // Amps to be determined. Must read the datasheet
+  // Read the current sense value
+  int currentSenseRaw = analogRead(IS_PINS);
+  currentAmps = floatMap(currentSenseRaw, 0, 1023, 0, 4300); // Amps to be determined. Must read the datasheet
 
-    // Update rolling average
-    currentAmpsHistory[currentAmpsIndex] = currentAmps;
-    currentAmpsIndex = (currentAmpsIndex + 1) % ROLLING_AVG_SIZE;
+  // Update rolling average
+  currentAmpsHistory[currentAmpsIndex] = currentAmps;
+  currentAmpsIndex = (currentAmpsIndex + 1) % ROLLING_AVG_SIZE;
 
-    rollingAverageCurrent = 0.0;
-    for (int i = 0; i < ROLLING_AVG_SIZE; i++) {
-        rollingAverageCurrent += currentAmpsHistory[i];
-    }
-    rollingAverageCurrent /= ROLLING_AVG_SIZE;
+  rollingAverageCurrent = 0.0;
+  for (int i = 0; i < ROLLING_AVG_SIZE; i++) {
+    rollingAverageCurrent += currentAmpsHistory[i];
+  }
+  rollingAverageCurrent /= ROLLING_AVG_SIZE;
 
-    // Stop motor if rolling average exceeds current limit
-    if (rollingAverageCurrent > currentLimit) {
-        stopMotor();
-        Serial.println("Motor stopped due to overcurrent!");
-    }
+  // Stop motor if rolling average exceeds current limit
+  if (rollingAverageCurrent > currentLimit) {
+    stopMotor();
+    Serial.println("Motor stopped due to overcurrent!");
+    Serial.print("Max current set to: ");
+    Serial.println(currentLimit);
+    Serial.print("Max current: ");
+    Serial.println(currentAmps);
 
-    static unsigned long lastFeedbackTime = 0;
-    static unsigned long lastHandshakeTime = 0;
-    unsigned long currentMillis = millis();
+  }
 
-    // Send telemetry feedback every 100ms
-    if (currentMillis - lastFeedbackTime > 100) {
-        sendFeedback();
-        lastFeedbackTime = currentMillis;
-    }
+  static unsigned long lastFeedbackTime = 0;
+  static unsigned long lastHandshakeTime = 0;
+  unsigned long currentMillis = millis();
 
-    // Send handshake every 1000ms to ensure detection
-    if (currentMillis - lastHandshakeTime > 1000) {
-        sendHandshake();
-        lastHandshakeTime = currentMillis;
-    }
+  // Send telemetry feedback every 100ms
+  if (currentMillis - lastFeedbackTime > 100) {
+    sendFeedback();
+    lastFeedbackTime = currentMillis;
+  }
+
+  // Send handshake every 1000ms to ensure detection
+  if (currentMillis - lastHandshakeTime > 1000) {
+    sendHandshake();
+    lastHandshakeTime = currentMillis;
+  }
 }
