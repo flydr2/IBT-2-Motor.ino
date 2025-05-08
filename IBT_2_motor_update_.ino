@@ -53,7 +53,8 @@ int currentLimit = 166;
 int maxMotorTemp = 100; // Example value for max motor temp
 int rudderMin = 0;      // Example rudder min
 int rudderMax = 255;    // Example rudder max
-int maxSlewRate = 10;   // Example max slew rate 1 to 255
+int maxSlewRate = 20;   // Example max slew rate 1 to 255
+int max_slew_slow = 20;
 bool motorEngaged = false;
 bool debugMode = false;  // Toggle debug mode
 
@@ -90,36 +91,62 @@ void stopMotor() {
   debugLog("Motor stopped");
 }
 
-void setMotorSpeed(int speed) {
+int calculateSlewRate(int targetSpeed, int lastSpeed, int maxSlewSpeed, int maxSlewSlow) {
+    int speedDifference = targetSpeed - lastSpeed;
 
+    if (speedDifference > maxSlewSpeed) {
+        return lastSpeed + maxSlewSpeed; // Accelerate up to the max slew speed
+    } else if (speedDifference < -maxSlewSlow) {
+        return lastSpeed - maxSlewSlow; // Decelerate up to the max slew slow
+    }
+       
+    return targetSpeed; // No slew limitation needed
+}
+
+void setMotorSpeed(int speed) {
+  static int lastSpeed = 0; // Track the last speed sent to the motor (range 0-255)
+
+  // If the speed is neutral (1000), stop the motor
   if (speed == 1000) {
     stopMotor();
+    lastSpeed = 0; // Reset lastSpeed to 0 when the motor stops
     return;
   }
 
+  // Map the input speed (1001–2000 or 0–999) to the 0–255 range
+  int targetSpeed = (speed < 1000)
+                        ? map(speed, 999, 0, 0, 255) // Reverse range
+                        : map(speed, 1001, 2000, 0, 255); // Forward range
+Serial.print("targetSpeedFRESH :"); Serial.println(targetSpeed);
+  // Only apply slew adjustment if the speed has changed
+  if (targetSpeed != lastSpeed) {
+    // Calculate the new speed using the slew rate
+    targetSpeed = calculateSlewRate(targetSpeed, lastSpeed, maxSlewRate, max_slew_slow); 
+    lastSpeed = targetSpeed; // Update the last speed
+  }
+
+Serial.print("targetSpeed :"); Serial.println(targetSpeed);
   motorEngaged = true;
 
+  // Apply the adjusted speed to the motor
   if (speed < 1000) { // Reverse
-    int reverseSpeed = map(speed, 999, 0, 0, 255);
     analogWrite(RPWM, 0);
-    analogWrite(LPWM, reverseSpeed);
+    analogWrite(LPWM, targetSpeed);
 
     if (debugMode) {
-      Serial.print("..................Motor engaged, reverse speed: ");
-      Serial.println(reverseSpeed);
+      Serial.print("..................Motor engaged, reverse speed (0-255): ");
+      Serial.println(targetSpeed);
     }
   } else if (speed > 1000) { // Forward
-    int forwardSpeed = map(speed, 1001, 2000, 0, 255);
     analogWrite(LPWM, 0);
-    analogWrite(RPWM, forwardSpeed);
+    analogWrite(RPWM, targetSpeed);
 
     if (debugMode) {
-      Serial.print("..................Motor engaged, forward speed: ");
-      Serial.println(forwardSpeed);
+      Serial.print("..................Motor engaged, forward speed (0-255): ");
+      Serial.println(targetSpeed);
     }
   }
 }
-
 void sendFeedback() {
 
     uint8_t feedback[4];
@@ -282,11 +309,29 @@ void parseCommand(uint8_t *command) {
       }
       break;
 
-    case MAX_SLEW_CODE:
-      maxSlewRate = value;
+case MAX_SLEW_CODE:
+      // Ensure buffer has enough data
+      maxSlewRate = command[1];
+      max_slew_slow = command[2];
+
+        // if set at the end of range (up to 255)  no slew limit
+        if(maxSlewRate > 250)
+            maxSlewRate = 250;
+        if(max_slew_slow > 250)
+            max_slew_slow = 250;
+        // must have some slew
+        if(maxSlewRate < 1)
+            maxSlewRate = 1;
+        if(max_slew_slow < 1)
+            max_slew_slow = 1;
+
+      
       if (debugMode) {
         Serial.print("Max slew rate set to: ");
         Serial.println(maxSlewRate);
+        Serial.print("Max slew SLOW set to: ");
+        Serial.println(max_slew_slow);
+
       }
       break;
 
