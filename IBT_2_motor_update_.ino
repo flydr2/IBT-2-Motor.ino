@@ -47,9 +47,10 @@ int maxSlewRate = 10;   // Example max slew rate 1 to 255
 bool motorEngaged = false;
 bool debugMode = false;  // Toggle debug mode
 
-//Testing variables
-int ENG = 33;
-int DIS = 22;
+#define ROLLING_AVG_SIZE 10
+float currentAmpsHistory[ROLLING_AVG_SIZE] = {0.0};
+int currentAmpsIndex = 0;
+float rollingAverageCurrent = 0.0;
 
 
 // Custom floatMap function
@@ -198,10 +199,10 @@ void parseCommand(uint8_t *command) {
 
     case COMMAND_CODE: // Includes speed and direction control
       setMotorSpeed(value);
-      //  if (debugMode) {
+        if (debugMode) {
       Serial.print("MOTOR SPEED CODE: ");
       Serial.println(value);
-      //    }
+          }
       break;
 
     case MAX_CONTROLLER_TEMP_CODE:
@@ -216,6 +217,7 @@ void parseCommand(uint8_t *command) {
       //  if (debugMode) {
       Serial.print("Max current set to: ");
       Serial.println(currentLimit);
+      Serial.print("Max current: ");
       Serial.println(currentAmps);
       //   }
       break;
@@ -298,45 +300,56 @@ void setup() {
 }
 
 void loop() {
-  static uint8_t buffer[4];
-  static uint8_t bufferIndex = 0;
+    static uint8_t buffer[4];
+    static uint8_t bufferIndex = 0;
 
-  while (Serial1.available() > 0) {
-    uint8_t receivedByte = Serial1.read();
-    buffer[bufferIndex++] = receivedByte;
+    while (Serial1.available() > 0) {
+        uint8_t receivedByte = Serial1.read();
+        buffer[bufferIndex++] = receivedByte;
 
-    if (bufferIndex == 4) {
-      if (verifyCRC(buffer)) {
-        parseCommand(buffer);
-      } else {
-        Serial.println("Invalid CRC received");
-      }
-      bufferIndex = 0;
+        if (bufferIndex == 4) {
+            if (verifyCRC(buffer)) {
+                parseCommand(buffer);
+            } else {
+                Serial.println("Invalid CRC received");
+            }
+            bufferIndex = 0;
+        }
     }
-  }
 
+    // Read the current sense value
+    int currentSenseRaw = analogRead(IS_PINS);
+    currentAmps = floatMap(currentSenseRaw, 0, 1023, 0, 5000); // Amps to be determined. Must read the datasheet
 
-  int currentSenseRaw = analogRead(IS_PINS);
-  currentAmps = floatMap(currentSenseRaw, 0, 1023, 0, 1500);// 15A to be determined. Must read the datasheet
-  if (currentAmps > currentLimit) {
-    stopMotor();
-    Serial.println("Motor stopped due to overcurrent!");
-  }
+    // Update rolling average
+    currentAmpsHistory[currentAmpsIndex] = currentAmps;
+    currentAmpsIndex = (currentAmpsIndex + 1) % ROLLING_AVG_SIZE;
 
+    rollingAverageCurrent = 0.0;
+    for (int i = 0; i < ROLLING_AVG_SIZE; i++) {
+        rollingAverageCurrent += currentAmpsHistory[i];
+    }
+    rollingAverageCurrent /= ROLLING_AVG_SIZE;
 
-  static unsigned long lastFeedbackTime = 0;
-  static unsigned long lastHandshakeTime = 0;
-  unsigned long currentMillis = millis();
+    // Stop motor if rolling average exceeds current limit
+    if (rollingAverageCurrent > currentLimit) {
+        stopMotor();
+        Serial.println("Motor stopped due to overcurrent!");
+    }
 
-  // Send telemetry feedback every 100ms
-  if (currentMillis - lastFeedbackTime > 100) {
-    sendFeedback();
-    lastFeedbackTime = currentMillis;
-  }
+    static unsigned long lastFeedbackTime = 0;
+    static unsigned long lastHandshakeTime = 0;
+    unsigned long currentMillis = millis();
 
-  // Send handshake every 1000ms to ensure detection
-  if (currentMillis - lastHandshakeTime > 1000) {
-    sendHandshake();
-    lastHandshakeTime = currentMillis;
-  }
+    // Send telemetry feedback every 100ms
+    if (currentMillis - lastFeedbackTime > 100) {
+        sendFeedback();
+        lastFeedbackTime = currentMillis;
+    }
+
+    // Send handshake every 1000ms to ensure detection
+    if (currentMillis - lastHandshakeTime > 1000) {
+        sendHandshake();
+        lastHandshakeTime = currentMillis;
+    }
 }
