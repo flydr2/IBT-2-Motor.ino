@@ -1,11 +1,11 @@
 // I'm currently working on this draft... Not ready for use
 
 //The enum are for my references
-enum commands {COMMAND_CODE=0xc7, RESET_CODE=0xe7, MAX_CURRENT_CODE=0x1e, MAX_CONTROLLER_TEMP_CODE=0xa4, MAX_MOTOR_TEMP_CODE=0x5a, RUDDER_RANGE_CODE=0xb6, RUDDER_MIN_CODE=0x2b, RUDDER_MAX_CODE=0x4d, REPROGRAM_CODE=0x19, DISENGAGE_CODE=0x68, MAX_SLEW_CODE=0x71, EEPROM_READ_CODE=0x91, EEPROM_WRITE_CODE=0x53, CLUTCH_PWM_AND_BRAKE_CODE=0x36};
+//enum commands {COMMAND_CODE=0xc7, RESET_CODE=0xe7, MAX_CURRENT_CODE=0x1e, MAX_CONTROLLER_TEMP_CODE=0xa4, MAX_MOTOR_TEMP_CODE=0x5a, RUDDER_RANGE_CODE=0xb6, RUDDER_MIN_CODE=0x2b, RUDDER_MAX_CODE=0x4d, REPROGRAM_CODE=0x19, DISENGAGE_CODE=0x68, MAX_SLEW_CODE=0x71, EEPROM_READ_CODE=0x91, EEPROM_WRITE_CODE=0x53, CLUTCH_PWM_AND_BRAKE_CODE=0x36};
 
-enum results {CURRENT_CODE=0x1c, VOLTAGE_CODE=0xb3, CONTROLLER_TEMP_CODE=0xf9, MOTOR_TEMP_CODE=0x48, RUDDER_SENSE_CODE=0xa7, FLAGS_CODE=0x8f, EEPROM_VALUE_CODE=0x9a};
+//enum results {CURRENT_CODE=0x1c, VOLTAGE_CODE=0xb3, CONTROLLER_TEMP_CODE=0xf9, MOTOR_TEMP_CODE=0x48, RUDDER_SENSE_CODE=0xa7, FLAGS_CODE=0x8f, EEPROM_VALUE_CODE=0x9a};
 
-enum {SYNC=1, OVERTEMP_FAULT=2, OVERCURRENT_FAULT=4, ENGAGED=8, INVALID=16, PORT_PIN_FAULT=32, STARBOARD_PIN_FAULT=64, BADVOLTAGE_FAULT=128, MIN_RUDDER_FAULT=256, MAX_RUDDER_FAULT=512, CURRENT_RANGE=1024, BAD_FUSES=2048, /* PORT_FAULT=4096  STARBOARD_FAULT=8192 */ REBOOTED=32768};
+//enum {SYNC=1, OVERTEMP_FAULT=2, OVERCURRENT_FAULT=4, ENGAGED=8, INVALID=16, PORT_PIN_FAULT=32, STARBOARD_PIN_FAULT=64, BADVOLTAGE_FAULT=128, MIN_RUDDER_FAULT=256, MAX_RUDDER_FAULT=512, CURRENT_RANGE=1024, BAD_FUSES=2048, /* PORT_FAULT=4096  STARBOARD_FAULT=8192 */ REBOOTED=32768};
 
 
 #include <Arduino.h>
@@ -23,6 +23,7 @@ enum {SYNC=1, OVERTEMP_FAULT=2, OVERCURRENT_FAULT=4, ENGAGED=8, INVALID=16, PORT
 #define DISENGAGE_CODE 0x68
 #define ENGAGE_CODE 0x36
 #define COMMAND_CODE 0xC7
+#define CONTROLLER_TEMP_CODE 0xf9
 #define MAX_CURRENT_CODE 0x1E // current in units of 10mA
 #define CURRENT_CODE 0x1C
 #define VOLTAGE_CODE 0xB3 // voltage in 10mV increments
@@ -30,6 +31,8 @@ enum {SYNC=1, OVERTEMP_FAULT=2, OVERCURRENT_FAULT=4, ENGAGED=8, INVALID=16, PORT
 #define MAX_MOTOR_TEMP_CODE 0x5A        //not used here
 #define RUDDER_MIN_CODE 0x2B
 #define RUDDER_MAX_CODE 0x4D
+#define RUDDER_SENSE_CODE 0xa7
+#define MOTOR_TEMP_CODE 0x48
 #define MAX_SLEW_CODE 0x71
 #define EEPROM_READ_CODE 0x91           //not used here
 #define MAX_CONTROLLER_TEMP_CODE 0xA4   //not used here
@@ -38,7 +41,7 @@ enum {SYNC=1, OVERTEMP_FAULT=2, OVERCURRENT_FAULT=4, ENGAGED=8, INVALID=16, PORT
 #define CLUTCH_PWM_AND_BRAKE_CODE 0x36  //not used here
 #define RESET_CODE 0xE7
 #define REPROGRAM_CODE 0x19
-
+#define EEPROM_VALUE_CODE 0x9a
 // Handshake and telemetry codes for Pypilot detection
 #define HANDSHAKE_CODE 0x5A
 
@@ -53,6 +56,13 @@ int rudderMax = 255;    // Example rudder max
 int maxSlewRate = 10;   // Example max slew rate 1 to 255
 bool motorEngaged = false;
 bool debugMode = false;  // Toggle debug mode
+
+// Define variables for feedback
+float controllerTemp = 25.0; // Example starting temperature for controller
+float motorTemp = 30.0;      // Example starting temperature for motor
+int rudderSense = 128;       // Example rudder sensor value (range: 0–255)
+uint8_t eepromValue = 0x00;  // Placeholder for EEPROM read value
+
 
 #define ROLLING_AVG_SIZE 10
 float currentAmpsHistory[ROLLING_AVG_SIZE] = {0.0};
@@ -111,49 +121,68 @@ void setMotorSpeed(int speed) {
 }
 
 void sendFeedback() {
-  static uint8_t feedbackType = 0; // Rotate between feedback types
-  uint8_t feedback[4];
 
-  uint16_t currentAmpsInt = static_cast<uint16_t>(currentAmps);// current in units of 10mA
-  uint16_t voltageInt = static_cast<uint16_t>(voltage * 100);
+    uint8_t feedback[4];
 
-  switch (feedbackType) {
-    case 0: // Current feedback
-      feedback[0] = CURRENT_CODE;
-      feedback[1] = currentAmpsInt & 0xFF;
-      feedback[2] = (currentAmpsInt >> 8) & 0xFF;
-      break;
+    // Send Current Feedback
+    uint16_t currentAmpsInt = static_cast<uint16_t>(currentAmps); // current in units of 10mA
+    feedback[0] = CURRENT_CODE;
+    feedback[1] = currentAmpsInt & 0xFF;
+    feedback[2] = (currentAmpsInt >> 8) & 0xFF;
+    feedback[3] = crc8(feedback, 3); // Calculate CRC
+    Serial1.write(feedback, 4);
 
-    case 1: // Voltage feedback
-      feedback[0] = VOLTAGE_CODE; // voltage in 10mV increments
-      feedback[1] = voltageInt & 0xFF;
-      feedback[2] = (voltageInt >> 8) & 0xFF;
-      break;
+    // Send Voltage Feedback
+    uint16_t voltageInt = static_cast<uint16_t>(voltage * 100); // voltage in 10mV increments
+    feedback[0] = VOLTAGE_CODE;
+    feedback[1] = voltageInt & 0xFF;
+    feedback[2] = (voltageInt >> 8) & 0xFF;
+    feedback[3] = crc8(feedback, 3); // Calculate CRC
+    Serial1.write(feedback, 4);
 
-    case 2: // Flags feedback
-      feedback[0] = FLAGS_CODE;
-      feedback[1] = motorEngaged ? 1 : 0;
-      feedback[2] = 0;
-      break;
+    // Send Controller Temperature Feedback
+    uint16_t controllerTemp = 0; // Replace with actual controller temperature value
+    feedback[0] = CONTROLLER_TEMP_CODE;
+    feedback[1] = controllerTemp & 0xFF;
+    feedback[2] = (controllerTemp >> 8) & 0xFF;
+    feedback[3] = crc8(feedback, 3); // Calculate CRC
+    Serial1.write(feedback, 4);
 
-    default:
-      feedbackType = 0;
-      return;
-  }
+    // Send Motor Temperature Feedback
+    uint16_t motorTemp = 0; // Replace with actual motor temperature value
+    feedback[0] = MOTOR_TEMP_CODE;
+    feedback[1] = motorTemp & 0xFF;
+    feedback[2] = (motorTemp >> 8) & 0xFF;
+    feedback[3] = crc8(feedback, 3); // Calculate CRC
+    Serial1.write(feedback, 4);
 
-  feedback[3] = crc8(feedback, 3); // Calculate CRC
-  Serial1.write(feedback, 4); // Send feedback packet
+    // Send Rudder Sense Feedback
+    uint16_t rudderSense = 0; // Replace with actual rudder sensor value
+    feedback[0] = RUDDER_SENSE_CODE;
+    feedback[1] = rudderSense & 0xFF;
+    feedback[2] = (rudderSense >> 8) & 0xFF;
+    feedback[3] = crc8(feedback, 3); // Calculate CRC
+    Serial1.write(feedback, 4);
 
-  if (debugMode) {
-    Serial.print("Sent feedback: ");
-    for (int i = 0; i < 4; i++) {
-      Serial.print(feedback[i], HEX);
-      Serial.print(" ");
+    // Send Flags Feedback
+    feedback[0] = FLAGS_CODE;
+    feedback[1] = motorEngaged ? 1 : 0; // Motor engaged state
+    feedback[2] = 0; // Reserved byte
+    feedback[3] = crc8(feedback, 3); // Calculate CRC
+    Serial1.write(feedback, 4);
+
+    // Send EEPROM Value Feedback
+    uint16_t eepromValue = 0; // Replace with actual EEPROM value
+    feedback[0] = EEPROM_VALUE_CODE;
+    feedback[1] = eepromValue & 0xFF;
+    feedback[2] = (eepromValue >> 8) & 0xFF;
+    feedback[3] = crc8(feedback, 3); // Calculate CRC
+    Serial1.write(feedback, 4);
+
+    // Debug Mode Output
+    if (debugMode) {
+        Serial.println("All feedback sent.");
     }
-    Serial.println();
-  }
-
-  feedbackType = (feedbackType + 1) % 3; // Rotate feedback type
 }
 
 void sendHandshake() {
