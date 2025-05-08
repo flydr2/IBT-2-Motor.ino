@@ -1,4 +1,5 @@
 // I'm currently working on this draft... Not ready for use
+// in the process of adding a rudder sensor
 
 //The enum are for my references
 //enum commands {COMMAND_CODE=0xc7, RESET_CODE=0xe7, MAX_CURRENT_CODE=0x1e, MAX_CONTROLLER_TEMP_CODE=0xa4, MAX_MOTOR_TEMP_CODE=0x5a, RUDDER_RANGE_CODE=0xb6, RUDDER_MIN_CODE=0x2b, RUDDER_MAX_CODE=0x4d, REPROGRAM_CODE=0x19, DISENGAGE_CODE=0x68, MAX_SLEW_CODE=0x71, EEPROM_READ_CODE=0x91, EEPROM_WRITE_CODE=0x53, CLUTCH_PWM_AND_BRAKE_CODE=0x36};
@@ -16,8 +17,10 @@
 #define RPWM 9
 #define LPWM 10
 #define REN 4 // for now these are wired to 5v (wire the 2 pins REN/LEN together to 1 arduino pin)
-
 #define IS_PINS A1 // both L and R tied together lowers the IBT "IS pins" voltage output... use a resitor to gnd to lower more (need to calculate)
+
+//#define DISABLE_RUDDER_SENSE  // if no rudder sense
+
 
 // Command and telemetry codes
 #define DISENGAGE_CODE 0x68
@@ -45,12 +48,7 @@
 
 // Handshake and telemetry codes for Pypilot detection
 #define HANDSHAKE_CODE 0x5A
-#define DEVICE_ID 0x01 // Unique identifier for this device
-#define DEVICE_TYPE 0x02 // Example: 0x02 for motor controllers
-#define FIRMWARE_VERSION 0x0101 // Firmware version 1.01
-#define MAX_CURRENT_CAP 50 // Max current in Amps
-#define VOLTAGE_RANGE 12 // Max voltage range in Volts
-#define HARDWARE_VERSION 0x01 // Example: Version 1.0
+
 
 // Global variables
 int speed = 1000;
@@ -59,7 +57,7 @@ float voltage = 12.0;
 int currentLimit = 166;
 int maxMotorTemp = 100; // Example value for max motor temp
 int rudderMin = 0;      // Example rudder min
-int rudderMax = 255;    // Example rudder max
+int rudderMax = 32767;    // // 32767.5 center is half neg values after half 65535
 int maxSlewRate = 20;   // Example max slew rate 1 to 255
 int max_slew_slow = 20;
 bool motorEngaged = false;
@@ -90,6 +88,38 @@ void debugLog(const char* message) {
   }
 }
 
+/*
+void rudderLimits(){ // Remember rudder end is near the 0 or -0... 
+                     //32767.5 center ...Min seems to always be zero
+
+    if(CountADC(RUDDER, 1) > rudder_react_count) {
+        uint16_t v = TakeRudder(1);
+        if(rudder_sense) {
+            // if not positive, then rudder feedback has negative gain (reversed)
+            uint8_t pos = rudder_min < rudder_max;
+            
+            if((pos && v < rudder_min) || (!pos && v > rudder_min)) {
+                stop_starboard();
+                flags |= MIN_RUDDER_FAULT;
+            } else
+                flags &= ~MIN_RUDDER_FAULT;
+            if((pos && v > rudder_max) || (!pos && v < rudder_max)) {
+                stop_port();
+                flags |= MAX_RUDDER_FAULT;
+            } else
+                flags &= ~MAX_RUDDER_FAULT;
+            if(v < 1024+1024 || v > 65472 - 1024)
+                rudder_sense = 0;
+        } else {
+            if(v > 1024+1536 && v < 65472 - 1536)
+                rudder_sense = 1;
+            flags &= ~(MIN_RUDDER_FAULT | MAX_RUDDER_FAULT);
+        }
+    }
+  
+}
+*/
+
 void stopMotor() {
   analogWrite(RPWM, 0);
   analogWrite(LPWM, 0);
@@ -99,15 +129,15 @@ void stopMotor() {
 }
 
 int calculateSlewRate(int targetSpeed, int lastSpeed, int maxSlewSpeed, int maxSlewSlow) {
-    int speedDifference = targetSpeed - lastSpeed;
+  int speedDifference = targetSpeed - lastSpeed;
 
-    if (speedDifference > maxSlewSpeed) {
-        return lastSpeed + maxSlewSpeed; // Accelerate up to the max slew speed
-    } else if (speedDifference < -maxSlewSlow) {
-        return lastSpeed - maxSlewSlow; // Decelerate up to the max slew slow
-    }
-       
-    return targetSpeed; // No slew limitation needed
+  if (speedDifference > maxSlewSpeed) {
+    return lastSpeed + maxSlewSpeed; // Accelerate up to the max slew speed
+  } else if (speedDifference < -maxSlewSlow) {
+    return lastSpeed - maxSlewSlow; // Decelerate up to the max slew slow
+  }
+
+  return targetSpeed; // No slew limitation needed
 }
 
 void setMotorSpeed(int speed) {
@@ -122,17 +152,18 @@ void setMotorSpeed(int speed) {
 
   // Map the input speed (1001–2000 or 0–999) to the 0–255 range
   int targetSpeed = (speed < 1000)
-                        ? map(speed, 999, 0, 0, 255) // Reverse range
-                        : map(speed, 1001, 2000, 0, 255); // Forward range
-Serial.print("targetSpeedFRESH :"); Serial.println(targetSpeed);
+                    ? map(speed, 999, 0, 0, 255) // Reverse range
+                    : map(speed, 1001, 2000, 0, 255); // Forward range
+  //Serial.print("targetSpeedFRESH :"); Serial.println(targetSpeed);
+  
   // Only apply slew adjustment if the speed has changed
   if (targetSpeed != lastSpeed) {
     // Calculate the new speed using the slew rate
-    targetSpeed = calculateSlewRate(targetSpeed, lastSpeed, maxSlewRate, max_slew_slow); 
+    targetSpeed = calculateSlewRate(targetSpeed, lastSpeed, maxSlewRate, max_slew_slow);
     lastSpeed = targetSpeed; // Update the last speed
   }
 
-Serial.print("targetSpeed :"); Serial.println(targetSpeed);
+  //Serial.print("targetSpeed :"); Serial.println(targetSpeed);
   motorEngaged = true;
 
   // Apply the adjusted speed to the motor
@@ -156,77 +187,77 @@ Serial.print("targetSpeed :"); Serial.println(targetSpeed);
 }
 void sendFeedback() {
 
-    uint8_t feedback[4];
+  uint8_t feedback[4];
 
-    // Send Current Feedback
-    uint16_t currentAmpsInt = static_cast<uint16_t>(currentAmps); // current in units of 10mA
-    feedback[0] = CURRENT_CODE;
-    feedback[1] = currentAmpsInt & 0xFF;
-    feedback[2] = (currentAmpsInt >> 8) & 0xFF;
-    feedback[3] = crc8(feedback, 3); // Calculate CRC
-    Serial1.write(feedback, 4);
+  // Send Current Feedback
+  uint16_t currentAmpsInt = static_cast<uint16_t>(currentAmps); // current in units of 10mA
+  feedback[0] = CURRENT_CODE;
+  feedback[1] = currentAmpsInt & 0xFF;
+  feedback[2] = (currentAmpsInt >> 8) & 0xFF;
+  feedback[3] = crc8(feedback, 3); // Calculate CRC
+  Serial1.write(feedback, 4);
 
-    // Send Voltage Feedback
-    uint16_t voltageInt = static_cast<uint16_t>(voltage * 100); // voltage in 10mV increments
-    feedback[0] = VOLTAGE_CODE;
-    feedback[1] = voltageInt & 0xFF;
-    feedback[2] = (voltageInt >> 8) & 0xFF;
-    feedback[3] = crc8(feedback, 3); // Calculate CRC
-    Serial1.write(feedback, 4);
+  // Send Voltage Feedback
+  uint16_t voltageInt = static_cast<uint16_t>(voltage * 100); // voltage in 10mV increments
+  feedback[0] = VOLTAGE_CODE;
+  feedback[1] = voltageInt & 0xFF;
+  feedback[2] = (voltageInt >> 8) & 0xFF;
+  feedback[3] = crc8(feedback, 3); // Calculate CRC
+  Serial1.write(feedback, 4);
 
-    // Send Controller Temperature Feedback
-    uint16_t controllerTemp = 0; // Replace with actual controller temperature value
-    feedback[0] = CONTROLLER_TEMP_CODE;
-    feedback[1] = controllerTemp & 0xFF;
-    feedback[2] = (controllerTemp >> 8) & 0xFF;
-    feedback[3] = crc8(feedback, 3); // Calculate CRC
-    Serial1.write(feedback, 4);
+  // Send Controller Temperature Feedback
+  uint16_t controllerTemp = 0; // Replace with actual controller temperature value
+  feedback[0] = CONTROLLER_TEMP_CODE;
+  feedback[1] = controllerTemp & 0xFF;
+  feedback[2] = (controllerTemp >> 8) & 0xFF;
+  feedback[3] = crc8(feedback, 3); // Calculate CRC
+  Serial1.write(feedback, 4);
 
-    // Send Motor Temperature Feedback
-    uint16_t motorTemp = 0; // Replace with actual motor temperature value
-    feedback[0] = MOTOR_TEMP_CODE;
-    feedback[1] = motorTemp & 0xFF;
-    feedback[2] = (motorTemp >> 8) & 0xFF;
-    feedback[3] = crc8(feedback, 3); // Calculate CRC
-    Serial1.write(feedback, 4);
+  // Send Motor Temperature Feedback
+  uint16_t motorTemp = 0; // Replace with actual motor temperature value
+  feedback[0] = MOTOR_TEMP_CODE;
+  feedback[1] = motorTemp & 0xFF;
+  feedback[2] = (motorTemp >> 8) & 0xFF;
+  feedback[3] = crc8(feedback, 3); // Calculate CRC
+  Serial1.write(feedback, 4);
 
-    // Send Rudder Sense Feedback
-    uint16_t rudderSense = 0; // Replace with actual rudder sensor value
-    feedback[0] = RUDDER_SENSE_CODE;
-    feedback[1] = rudderSense & 0xFF;
-    feedback[2] = (rudderSense >> 8) & 0xFF;
-    feedback[3] = crc8(feedback, 3); // Calculate CRC
-    Serial1.write(feedback, 4);
+  // Send Rudder Sense Feedback
+  uint16_t rudderSense = 0; // Replace with actual rudder sensor value
+  feedback[0] = RUDDER_SENSE_CODE;
+  feedback[1] = rudderSense & 0xFF;
+  feedback[2] = (rudderSense >> 8) & 0xFF;
+  feedback[3] = crc8(feedback, 3); // Calculate CRC
+  Serial1.write(feedback, 4);
 
-    // Send Flags Feedback
-    feedback[0] = FLAGS_CODE;
-    feedback[1] = motorEngaged ? 1 : 0; // Motor engaged state
-    feedback[2] = 0; // Reserved byte
-    feedback[3] = crc8(feedback, 3); // Calculate CRC
-    Serial1.write(feedback, 4);
+  // Send Flags Feedback
+  feedback[0] = FLAGS_CODE;
+  feedback[1] = motorEngaged ? 1 : 0; // Motor engaged state
+  feedback[2] = 0; // Reserved byte
+  feedback[3] = crc8(feedback, 3); // Calculate CRC
+  Serial1.write(feedback, 4);
 
-    // Send EEPROM Value Feedback
-    uint16_t eepromValue = 0; // Replace with actual EEPROM value
-    feedback[0] = EEPROM_VALUE_CODE;
-    feedback[1] = eepromValue & 0xFF;
-    feedback[2] = (eepromValue >> 8) & 0xFF;
-    feedback[3] = crc8(feedback, 3); // Calculate CRC
-    Serial1.write(feedback, 4);
+  // Send EEPROM Value Feedback
+  uint16_t eepromValue = 0; // Replace with actual EEPROM value
+  feedback[0] = EEPROM_VALUE_CODE;
+  feedback[1] = eepromValue & 0xFF;
+  feedback[2] = (eepromValue >> 8) & 0xFF;
+  feedback[3] = crc8(feedback, 3); // Calculate CRC
+  Serial1.write(feedback, 4);
 
-    // Debug Mode Output
-    if (debugMode) {
-        Serial.println("All feedback sent.");
-    }
+  // Debug Mode Output
+  if (debugMode) {
+    Serial.println("All feedback sent.");
+  }
 }
 
 void sendHandshake() {
-    uint8_t handshake[4];
-    handshake[0] = HANDSHAKE_CODE;   // Handshake code (e.g., 0x5A)
-    handshake[1] = 0x00;            // Reserved byte
-    handshake[2] = 0x00;            // Reserved byte
-    handshake[3] = crc8(handshake, 3); // Calculate CRC for the first 3 bytes
+  uint8_t handshake[4];
+  handshake[0] = HANDSHAKE_CODE;   // Handshake code (e.g., 0x5A)
+  handshake[1] = 0x00;            // Reserved byte
+  handshake[2] = 0x00;            // Reserved byte
+  handshake[3] = crc8(handshake, 3); // Calculate CRC for the first 3 bytes
 
-    Serial1.write(handshake, 4);    // Send the 4-byte handshake packet
+  Serial1.write(handshake, 4);    // Send the 4-byte handshake packet
 }
 
 
@@ -294,42 +325,42 @@ void parseCommand(uint8_t *command) {
 
     case RUDDER_MIN_CODE:
       rudderMin = value;
-      if (debugMode) {
-        Serial.print("Rudder minimum set to: ");
-        Serial.println(rudderMin);
-      }
+      //   if (debugMode) {
+      Serial.print("Rudder minimum set to: ");
+      Serial.println(rudderMin);
+      //  }
       break;
 
     case RUDDER_MAX_CODE:
       rudderMax = value;
-      if (debugMode) {
-        Serial.print("Rudder maximum set to: ");
-        Serial.println(rudderMax);
-      }
+      //   if (debugMode) {
+      Serial.print("Rudder maximum set to: ");
+      Serial.println(rudderMax);
+      //   }
       break;
 
-case MAX_SLEW_CODE:
+    case MAX_SLEW_CODE:
       // Ensure buffer has enough data
       maxSlewRate = command[1];
       max_slew_slow = command[2];
 
-        // if set at the end of range (up to 255)  no slew limit
-        if(maxSlewRate > 250)
-            maxSlewRate = 250;
-        if(max_slew_slow > 250)
-            max_slew_slow = 250;
-        // must have some slew
-        if(maxSlewRate < 1)
-            maxSlewRate = 1;
-        if(max_slew_slow < 1)
-            max_slew_slow = 1;
+      // if set at the end of range (up to 255)  no slew limit
+      if (maxSlewRate > 250)
+        maxSlewRate = 255;
+      if (max_slew_slow > 250)
+        max_slew_slow = 255;
+      // must have some slew
+      if (maxSlewRate < 1)
+        maxSlewRate = 1;
+      if (max_slew_slow < 1)
+        max_slew_slow = 1;
 
-      
+
       if (debugMode) {
-//        Serial.print("Max slew rate set to: ");
-//        Serial.println(maxSlewRate);
-//        Serial.print("Max slew SLOW set to: ");
-//        Serial.println(max_slew_slow);
+        //        Serial.print("Max slew rate set to: ");
+        //        Serial.println(maxSlewRate);
+        //        Serial.print("Max slew SLOW set to: ");
+        //        Serial.println(max_slew_slow);
 
       }
       break;
@@ -386,7 +417,7 @@ void loop() {
   while (Serial1.available() > 0) {
     uint8_t receivedByte = Serial1.read();
     buffer[bufferIndex++] = receivedByte;
-    
+
 
     if (bufferIndex == 4) {
       if (verifyCRC(buffer)) {
