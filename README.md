@@ -9,3 +9,5 @@ Anyone willing to help here would be great.
 
 I will continue to improve this with time.
 Also I will make an ESP32 version which will also contain a simple backup autopilot (self-contained) controlled by wifi or bluetooth.
+
+IBT_2_motor_update_.ino is the file I'm currently working on... Added slew an more.
