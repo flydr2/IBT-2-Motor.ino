@@ -342,6 +342,7 @@ void loop() {
   while (Serial1.available() > 0) {
     uint8_t receivedByte = Serial1.read();
     buffer[bufferIndex++] = receivedByte;
+    
 
     if (bufferIndex == 4) {
       if (verifyCRC(buffer)) {
