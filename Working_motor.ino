@@ -1,3 +1,7 @@
+// This is a very crude but working script
+// The other file is more complete.
+// For use on arduino Mega serial port 1
+
 #include <Arduino.h>
 #include "crc.h" // Ensure crc.h is available for CRC calculations
 
