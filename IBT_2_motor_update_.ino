@@ -2,7 +2,7 @@
 //adding a rudder sensor only based on overcurrent... It works and careful settings of the amps in pypilot is required.
 // Make sure that the voltage at pin A1 does not go over 5v... and that 5v is 43a or rescale it in the map function
 // added current faults
-//' This uses Serial1 on arduino Mega.
+//'********** This uses Serial1 on arduino Mega.************
 // Added rudder limit switches (should ground them if not used)
 
 #include <Arduino.h>
