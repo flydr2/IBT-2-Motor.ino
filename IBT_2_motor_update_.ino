@@ -1,5 +1,6 @@
 // I'm currently working on this draft... Not ready for use
-// in the process of adding a rudder sensor
+// in the process of adding a rudder sensor only based on overcurrent
+
 // added current faults
 
 
@@ -8,7 +9,7 @@
 
 //enum results {CURRENT_CODE=0x1c, VOLTAGE_CODE=0xb3, CONTROLLER_TEMP_CODE=0xf9, MOTOR_TEMP_CODE=0x48, RUDDER_SENSE_CODE=0xa7, FLAGS_CODE=0x8f, EEPROM_VALUE_CODE=0x9a};
 
-enum {SYNC=1, OVERTEMP_FAULT=2, OVERCURRENT_FAULT=4, ENGAGED=8, INVALID=16, PORT_PIN_FAULT=32, STARBOARD_PIN_FAULT=64, BADVOLTAGE_FAULT=128, MIN_RUDDER_FAULT=256, MAX_RUDDER_FAULT=512, CURRENT_RANGE=1024, BAD_FUSES=2048, /* PORT_FAULT=4096  STARBOARD_FAULT=8192 */ REBOOTED=32768};
+//enum {SYNC = 1, OVERTEMP_FAULT = 2, OVERCURRENT_FAULT = 4, ENGAGED = 8, INVALID = 16, PORT_PIN_FAULT = 32, STARBOARD_PIN_FAULT = 64, BADVOLTAGE_FAULT = 128, MIN_RUDDER_FAULT = 256, MAX_RUDDER_FAULT = 512, CURRENT_RANGE = 1024, BAD_FUSES = 2048, /* PORT_FAULT=4096  STARBOARD_FAULT=8192 */ REBOOTED = 32768};
 
 
 #include <Arduino.h>
@@ -16,14 +17,10 @@ enum {SYNC=1, OVERTEMP_FAULT=2, OVERCURRENT_FAULT=4, ENGAGED=8, INVALID=16, PORT
 //#include <avr/boot.h> // Include for microcontroller signature identification
 
 // Pin definitions
-#define RPWM 9
-#define LPWM 10
+#define RPWM 10 //change these to your directions port/starboard
+#define LPWM 9
 #define REN 4 // for now these are wired to 5v (wire the 2 pins REN/LEN together to 1 arduino pin)
 #define IS_PINS A1 // both L and R tied together lowers the IBT "IS pins" voltage output... use a resitor to gnd to lower more (need to calculate)
-#define Rudder_pin A0 // rudder sensor (0-1024) 0-5v
-
-
-//#define ENABLE_RUDDER_SENSE  // if no rudder sense
 
 
 // Command and telemetry codes
@@ -60,22 +57,20 @@ enum {SYNC=1, OVERTEMP_FAULT=2, OVERCURRENT_FAULT=4, ENGAGED=8, INVALID=16, PORT
 int speed = 1000;
 float currentAmps = 0.0;
 float voltage = 12.0;
-int currentLimit = 166;
+int currentLimit = 1024;// just a number at this point
 int maxMotorTemp = 100; // Example value for max motor temp
-int rudderMin = 0;      // Example rudder min
-int rudderMax = 32767;    // // 32767.5 center is half neg values after half 65535
 int maxSlewRate = 20;   // Example max slew rate 1 to 255
 int max_slew_slow = 20;
 bool motorEngaged = false;
 bool debugMode = false;  // Toggle debug mode
 uint16_t flags;
-
-
+int port_starboard_direction; //Set the present motor direction 0=no direction 1=port 2=strarboard
+int starboard_overcurrent = 0;
+int port_overcurrent = 0;
 // Define variables for feedback
 float controllerTemp = 25.0; // Example starting temperature for controller
 float motorTemp = 30.0;      // Example starting temperature for motor
-int rudderSense = 128;       // Example rudder sensor value (range: 0–255)
-uint8_t eepromValue = 0x00;  // Placeholder for EEPROM read value
+
 
 
 #define ROLLING_AVG_SIZE 10
@@ -96,47 +91,26 @@ void debugLog(const char* message) {
   }
 }
 
-void rudderLimits() {
-  // Example rudder sensor value (map this to your actual sensor reading logic)
-  uint16_t rudderValue = analogRead(Rudder_pin); // Replace this with the correct pin if necessary
+void stop_port()
+{
+  stopMotor();
+  port_overcurrent = 1;
+  Serial.println("Port overCurrent");
 
-  // Check if rudder feedback is enabled
-#ifdef ENABLE_RUDDER_SENSE {
-    // Determine if the rudder feedback has positive or negative gain
-    bool isPositive = rudderMin < rudderMax;
-
-    // Check for rudder limits and apply fault flags accordingly
-    if ((isPositive && rudderValue < rudderMin) || (!isPositive && rudderValue > rudderMin)) {
-      stopMotor(); // Stop the motor if the rudder is below the minimum limit
-      flags |= MIN_RUDDER_FAULT; // Set minimum rudder fault flag
-    } else {
-      flags &= ~MIN_RUDDER_FAULT; // Clear minimum rudder fault flag
-    }
-
-    if ((isPositive && rudderValue > rudderMax) || (!isPositive && rudderValue < rudderMax)) {
-      stopMotor(); // Stop the motor if the rudder is above the maximum limit
-      flags |= MAX_RUDDER_FAULT; // Set maximum rudder fault flag
-    } else {
-      flags &= ~MAX_RUDDER_FAULT; // Clear maximum rudder fault flag
-    }
-
-    // Disable rudder sense if value goes out of range
-    if (rudderValue < 1024 + 1024 || rudderValue > 65472 - 1024) {
-     
-    }
-  } else {
-    // Re-enable rudder sense if value is within range
-    if (rudderValue > 1024 + 1536 && rudderValue < 65472 - 1536) {
-      
-    }
-    flags &= ~(MIN_RUDDER_FAULT | MAX_RUDDER_FAULT); // Clear fault flags
-  }
-  #endif
 }
+
+void stop_starboard()
+{
+  stopMotor();
+  starboard_overcurrent = 1;
+  Serial.println("Starboard overCurrent");
+
+}
+
 
 void resetFaults() {
   // Reset all fault flags
-  flags &= ~(OVERCURRENT_FAULT);// | MIN_RUDDER_FAULT | MAX_RUDDER_FAULT);// add fauld to reset to the list here
+  flags &= ~(OVERCURRENT_FAULT);//  add fauld to reset to the list here
 
   // Debug output for confirmation
   if (debugMode) {
@@ -165,10 +139,12 @@ int calculateSlewRate(int targetSpeed, int lastSpeed, int maxSlewSpeed, int maxS
 }
 
 void setMotorSpeed(int speed) {
-  static int lastSpeed = 0; // Track the last speed sent to the motor (range 0-255)
 
-  // If the speed is neutral (1000), stop the motor
-  if (speed == 1000) {
+  static int lastSpeed = 0; // Track the last speed sent to the motor (range 0-255)
+  // Serial.println(speed);
+  // If the speed is neutral (1000), stop the motor or 254 no new code
+  if ((speed == 1000) || (speed == 254)) {
+
     stopMotor();
     lastSpeed = 0; // Reset lastSpeed to 0 when the motor stops
     return;
@@ -176,8 +152,8 @@ void setMotorSpeed(int speed) {
 
   // Map the input speed (1001–2000 or 0–999) to the 0–255 range
   int targetSpeed = (speed < 1000)
-                    ? map(speed, 999, 0, 0, 255) // Reverse range
-                    : map(speed, 1001, 2000, 0, 255); // Forward range
+                    ? map(speed, 999, 0, 0, 250) // Reverse range
+                    : map(speed, 1001, 2000, 0, 250); // Forward range
   //Serial.print("targetSpeedFRESH :"); Serial.println(targetSpeed);
 
   // Only apply slew adjustment if the speed has changed
@@ -187,24 +163,45 @@ void setMotorSpeed(int speed) {
     lastSpeed = targetSpeed; // Update the last speed
   }
 
-  //Serial.print("targetSpeed :"); Serial.println(targetSpeed);
   motorEngaged = true;
 
   // Apply the adjusted speed to the motor
-  if (speed < 1000) { // Reverse
-    analogWrite(RPWM, 0);
-    analogWrite(LPWM, targetSpeed);
-
+ // if (debugMode) {
+    Serial.print("Port overcurrent status = ");
+    Serial.println(port_overcurrent);
+    Serial.print("Starboard overcurrent status = ");
+    Serial.println(starboard_overcurrent);
+ // }
+  if (speed < 1000) { // STARBOARD TURN
+    port_starboard_direction = 2;// 2 is starboard direction
+    port_overcurrent = 0; // reset the overcurrent starboard fault because we go in the opposite direction
+    if (starboard_overcurrent == 0) {
+      analogWrite(RPWM, 0);
+      analogWrite(LPWM, targetSpeed);
+      Serial.print("..................Motor engaged, STARBOARD speed (0-255): ");
+      Serial.println(targetSpeed);
+    } else {
+      stop_starboard();
+    }
     if (debugMode) {
-      Serial.print("..................Motor engaged, reverse speed (0-255): ");
+      Serial.print("..................Motor engaged, STARBOARD speed (0-255): ");
       Serial.println(targetSpeed);
     }
-  } else if (speed > 1000) { // Forward
-    analogWrite(LPWM, 0);
-    analogWrite(RPWM, targetSpeed);
 
+  } else if (speed > 1000) { // PORT
+    port_starboard_direction = 1; // 1 is port
+    starboard_overcurrent = 0; // reset the overcurrent port fault because we go in the opposite direction
+    if (port_overcurrent == 0) {
+      analogWrite(LPWM, 0);
+      analogWrite(RPWM, targetSpeed);
+  //    Serial.print("..................Motor engaged, PORT speed (0-255): ");
+  //    Serial.println(targetSpeed);
+
+    } else {
+      stop_port();
+    }
     if (debugMode) {
-      Serial.print("..................Motor engaged, forward speed (0-255): ");
+      Serial.print("..................Motor engaged, PORT speed (0-255): ");
       Serial.println(targetSpeed);
     }
   }
@@ -244,16 +241,6 @@ void sendFeedback() {
   feedback[3] = crc8(feedback, 3); // Calculate CRC
   Serial1.write(feedback, 4);
 
-  // Send Rudder Sense Feedback if enabled
-# ifdef ENABLE_RUDDER_SENSE {
-    uint16_t rudderValue = analogRead(IS_PINS); // Replace IS_PINS with the actual rudder sensor pin
-    feedback[0] = RUDDER_SENSE_CODE;
-    feedback[1] = rudderValue & 0xFF;
-    feedback[2] = (rudderValue >> 8) & 0xFF;
-    feedback[3] = crc8(feedback, 3); // Calculate CRC
-    Serial1.write(feedback, 4);
-  }
-#endif
 
   // Send Flags Feedback (including faults)
   uint8_t faultFlags = 0;
@@ -263,18 +250,8 @@ void sendFeedback() {
     faultFlags |= OVERCURRENT_FAULT; // Set overcurrent fault flag
   }
 
-  // Check for rudder faults
-#ifdef ENABLE_RUDDER_SENSE {
-    uint16_t rudderValue = analogRead(IS_PINS); // Replace IS_PINS with the actual rudder sensor pin
-    if (rudderValue < rudderMin) {
-      faultFlags |= MIN_RUDDER_FAULT; // Set minimum rudder fault flag
-    }
-    if (rudderValue > rudderMax) {
-      faultFlags |= MAX_RUDDER_FAULT; // Set maximum rudder fault flag
-    }
-  }
-#endif
 
+  flags = faultFlags;
   feedback[0] = FLAGS_CODE;
   feedback[1] = faultFlags; // Send fault flags (overcurrent, rudder faults)
   feedback[2] = 0; // Reserved byte
@@ -287,12 +264,7 @@ void sendFeedback() {
     if (faultFlags & OVERCURRENT_FAULT) {
       Serial.println("Overcurrent fault detected!");
     }
-    if (faultFlags & MIN_RUDDER_FAULT) {
-      Serial.println("Minimum rudder fault detected!");
-    }
-    if (faultFlags & MAX_RUDDER_FAULT) {
-      Serial.println("Maximum rudder fault detected!");
-    }
+
   }
 }
 
@@ -338,7 +310,7 @@ void parseCommand(uint8_t *command) {
       break;
 
     case ENGAGE_CODE: //
-      setMotorSpeed(value);
+      //setMotorSpeed(value);
       if (debugMode) {
         Serial.print("ENGAGE CODE: ");
         Serial.println(value);
@@ -378,21 +350,6 @@ void parseCommand(uint8_t *command) {
       //      }
       break;
 
-    case RUDDER_MIN_CODE:
-      rudderMin = value;
-      //   if (debugMode) {
-      Serial.print("Rudder minimum set to: ");
-      Serial.println(rudderMin);
-      //  }
-      break;
-
-    case RUDDER_MAX_CODE:
-      rudderMax = value;
-      //   if (debugMode) {
-      Serial.print("Rudder maximum set to: ");
-      Serial.println(rudderMax);
-      //   }
-      break;
 
     case MAX_SLEW_CODE:
       // Ensure buffer has enough data
@@ -500,7 +457,12 @@ void loop() {
 
   // Stop motor if rolling average exceeds current limit
   if (rollingAverageCurrent > currentLimit) {
-    stopMotor();
+    if (port_starboard_direction == 1) { // Chect which side to stop
+      stop_port();
+    }
+    if (port_starboard_direction == 2) {
+      stop_starboard();
+    }
     Serial.println("Motor stopped due to overcurrent!");
     Serial.print("Max current set to: ");
     Serial.println(currentLimit);
@@ -511,6 +473,7 @@ void loop() {
 
   static unsigned long lastFeedbackTime = 0;
   static unsigned long lastHandshakeTime = 0;
+  static unsigned long lastResetTime = 0;
   unsigned long currentMillis = millis();
 
   // Send telemetry feedback every 100ms
@@ -524,4 +487,17 @@ void loop() {
     sendHandshake();
     lastHandshakeTime = currentMillis;
   }
-}
+  // Reset port starboard faults every 10sec to ensure not stuck
+  //  if ((starboard_overcurrent != 0) || (port_overcurrent != 0)) {
+  //
+  //    if (currentMillis - lastResetTime > 10000) {
+  //      starboard_overcurrent = 0;
+  //      port_overcurrent = 0;
+  //      lastResetTime = currentMillis;
+  //    }
+  //
+  //  } else {
+  //    lastResetTime = currentMillis;
+  //  }
+  //
+}// End Loop
