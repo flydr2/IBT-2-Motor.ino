@@ -1,26 +1,21 @@
-// I'm currently working on this draft... Not ready for use
-// in the process of adding a rudder sensor only based on overcurrent
-
+// I'm currently working on this draft...
+//adding a rudder sensor only based on overcurrent... It works and careful settings of the amps in pypilot is required.
+// Make sure that the voltage at pin A1 does not go over 5v... and that 5v is 43a or rescale it in the map function
 // added current faults
-
-
-//The enum are for my references
-//enum commands {COMMAND_CODE=0xc7, RESET_CODE=0xe7, MAX_CURRENT_CODE=0x1e, MAX_CONTROLLER_TEMP_CODE=0xa4, MAX_MOTOR_TEMP_CODE=0x5a, RUDDER_RANGE_CODE=0xb6, RUDDER_MIN_CODE=0x2b, RUDDER_MAX_CODE=0x4d, REPROGRAM_CODE=0x19, DISENGAGE_CODE=0x68, MAX_SLEW_CODE=0x71, EEPROM_READ_CODE=0x91, EEPROM_WRITE_CODE=0x53, CLUTCH_PWM_AND_BRAKE_CODE=0x36};
-
-//enum results {CURRENT_CODE=0x1c, VOLTAGE_CODE=0xb3, CONTROLLER_TEMP_CODE=0xf9, MOTOR_TEMP_CODE=0x48, RUDDER_SENSE_CODE=0xa7, FLAGS_CODE=0x8f, EEPROM_VALUE_CODE=0x9a};
-
-//enum {SYNC = 1, OVERTEMP_FAULT = 2, OVERCURRENT_FAULT = 4, ENGAGED = 8, INVALID = 16, PORT_PIN_FAULT = 32, STARBOARD_PIN_FAULT = 64, BADVOLTAGE_FAULT = 128, MIN_RUDDER_FAULT = 256, MAX_RUDDER_FAULT = 512, CURRENT_RANGE = 1024, BAD_FUSES = 2048, /* PORT_FAULT=4096  STARBOARD_FAULT=8192 */ REBOOTED = 32768};
-
+//' This uses Serial1 on arduino Mega.
+// Added rudder limit switches (should ground them if not used)
 
 #include <Arduino.h>
 #include "crc.h" // Ensure crc.h is available for CRC calculations
-//#include <avr/boot.h> // Include for microcontroller signature identification
+
 
 // Pin definitions
 #define RPWM 10 //change these to your directions port/starboard
 #define LPWM 9
-#define REN 4 // for now these are wired to 5v (wire the 2 pins REN/LEN together to 1 arduino pin)
-#define IS_PINS A1 // both L and R tied together lowers the IBT "IS pins" voltage output... use a resitor to gnd to lower more (need to calculate)
+#define REN 4 // (wire the 2 pins REN/LEN together to 1 arduino pin)
+#define IS_PINS A1 //  both L and R tied together lowers the IBT "IS pins" voltage output... use a resitor to gnd to lower more (need to calculate)
+#define Port_Switch_pin 4
+#define Starboard_Switch_pin 5 // rudder limit switches... 
 
 
 // Command and telemetry codes
@@ -47,7 +42,7 @@
 #define REPROGRAM_CODE 0x19
 #define EEPROM_VALUE_CODE 0x9a
 #define OVERCURRENT_FAULT 4
-
+#define SYNC 1
 
 // Handshake and telemetry codes for Pypilot detection
 #define HANDSHAKE_CODE 0x5A
@@ -59,21 +54,23 @@ float currentAmps = 0.0;
 float voltage = 12.0;
 int currentLimit = 1024;// just a number at this point
 int maxMotorTemp = 100; // Example value for max motor temp
-int maxSlewRate = 20;   // Example max slew rate 1 to 255
-int max_slew_slow = 20;
+int maxSlewRate = 20;   // Example max slew rate 1 to 100
+int max_slew_slow = 20;  // Example max slew rate 1 to 100
 bool motorEngaged = false;
 bool debugMode = false;  // Toggle debug mode
 uint16_t flags;
-int port_starboard_direction; //Set the present motor direction 0=no direction 1=port 2=strarboard
-int starboard_overcurrent = 0;
+int port_starboard_direction; //Sets the present motor direction 1=port 2=strarboard
+int starboard_overcurrent = 0; // Flag
 int port_overcurrent = 0;
+int PortValue = 0;
+int StarboardValue = 0;
+
+
 // Define variables for feedback
 float controllerTemp = 25.0; // Example starting temperature for controller
 float motorTemp = 30.0;      // Example starting temperature for motor
 
-
-
-#define ROLLING_AVG_SIZE 10
+#define ROLLING_AVG_SIZE 30
 float currentAmpsHistory[ROLLING_AVG_SIZE] = {0.0};
 int currentAmpsIndex = 0;
 float rollingAverageCurrent = 0.0;
@@ -166,12 +163,12 @@ void setMotorSpeed(int speed) {
   motorEngaged = true;
 
   // Apply the adjusted speed to the motor
- // if (debugMode) {
+  if (debugMode) {
     Serial.print("Port overcurrent status = ");
     Serial.println(port_overcurrent);
     Serial.print("Starboard overcurrent status = ");
     Serial.println(starboard_overcurrent);
- // }
+  }
   if (speed < 1000) { // STARBOARD TURN
     port_starboard_direction = 2;// 2 is starboard direction
     port_overcurrent = 0; // reset the overcurrent starboard fault because we go in the opposite direction
@@ -180,6 +177,8 @@ void setMotorSpeed(int speed) {
       analogWrite(LPWM, targetSpeed);
       Serial.print("..................Motor engaged, STARBOARD speed (0-255): ");
       Serial.println(targetSpeed);
+      Serial.print("Max current: ");
+      Serial.println(rollingAverageCurrent * .01, 2); // back to amps
     } else {
       stop_starboard();
     }
@@ -194,8 +193,10 @@ void setMotorSpeed(int speed) {
     if (port_overcurrent == 0) {
       analogWrite(LPWM, 0);
       analogWrite(RPWM, targetSpeed);
-  //    Serial.print("..................Motor engaged, PORT speed (0-255): ");
-  //    Serial.println(targetSpeed);
+      Serial.print("..................Motor engaged, PORT speed (0-255): ");
+      Serial.println(targetSpeed);
+      Serial.print("Max current: ");
+      Serial.println(rollingAverageCurrent * .01, 2); // back to amps
 
     } else {
       stop_port();
@@ -210,7 +211,7 @@ void sendFeedback() {
   uint8_t feedback[4];
 
   // Send Current Feedback
-  uint16_t currentAmpsInt = static_cast<uint16_t>(currentAmps); // current in units of 10mA
+  uint16_t currentAmpsInt = static_cast<uint16_t>(rollingAverageCurrent); // current in units of 10mA
   feedback[0] = CURRENT_CODE;
   feedback[1] = currentAmpsInt & 0xFF;
   feedback[2] = (currentAmpsInt >> 8) & 0xFF;
@@ -338,7 +339,7 @@ void parseCommand(uint8_t *command) {
         Serial.print("Max current set to: ");
         Serial.println(currentLimit);
         Serial.print("Max current: ");
-        Serial.println(currentAmps);
+        Serial.println(rollingAverageCurrent * .01, 2); // back to amps
       }
       break;
 
@@ -406,7 +407,8 @@ void setup() {
   pinMode(RPWM, OUTPUT);
   pinMode(LPWM, OUTPUT);
   pinMode(REN, OUTPUT);
-
+  pinMode(Port_Switch_pin, INPUT);
+  pinMode(Starboard_Switch_pin, INPUT);
   pinMode(IS_PINS, INPUT);
 
   speed = 1000;
@@ -434,6 +436,7 @@ void loop() {
     if (bufferIndex == 4) {
       if (verifyCRC(buffer)) {
         parseCommand(buffer);
+        sendFeedback();
       } else {
         Serial.println("Invalid CRC received");
       }
@@ -454,23 +457,39 @@ void loop() {
     rollingAverageCurrent += currentAmpsHistory[i];
   }
   rollingAverageCurrent /= ROLLING_AVG_SIZE;
-
+  
+////////////////////////////////////////////////////////////////////////////
   // Stop motor if rolling average exceeds current limit
   if (rollingAverageCurrent > currentLimit) {
-    if (port_starboard_direction == 1) { // Chect which side to stop
+    if (port_starboard_direction == 1) { // Check which side to stop
       stop_port();
     }
     if (port_starboard_direction == 2) {
       stop_starboard();
     }
-    Serial.println("Motor stopped due to overcurrent!");
-    Serial.print("Max current set to: ");
-    Serial.println(currentLimit);
-    Serial.print("Max current: ");
-    Serial.println(currentAmps);
-
+    if (debugMode) {
+      Serial.println("Motor stopped due to overcurrent!");
+      Serial.print("Max current set to: ");
+      Serial.println(currentLimit);
+      Serial.print("Max current: ");
+      Serial.println(rollingAverageCurrent * .01, 2); // back to amps
+    }
+  }
+  PortValue = digitalRead(Port_Switch_pin);
+  if (port_starboard_direction == 1) { // Check which side to stop
+    if (PortValue == 1) { // if the pin is HIGH stop the motor
+      stop_port();
+    }
+  }
+  StarboardValue = digitalRead(Starboard_Switch_pin);
+  if (port_starboard_direction == 2) {
+    if (StarboardValue == 1) { // if the pin is HIGH stop the motor
+      stop_starboard();
+    }
   }
 
+
+  //////////////////////////////////////////////////////////////////
   static unsigned long lastFeedbackTime = 0;
   static unsigned long lastHandshakeTime = 0;
   static unsigned long lastResetTime = 0;
@@ -478,7 +497,7 @@ void loop() {
 
   // Send telemetry feedback every 100ms
   if (currentMillis - lastFeedbackTime > 100) {
-    sendFeedback();
+    // sendFeedback();
     lastFeedbackTime = currentMillis;
   }
 
@@ -487,17 +506,5 @@ void loop() {
     sendHandshake();
     lastHandshakeTime = currentMillis;
   }
-  // Reset port starboard faults every 10sec to ensure not stuck
-  //  if ((starboard_overcurrent != 0) || (port_overcurrent != 0)) {
-  //
-  //    if (currentMillis - lastResetTime > 10000) {
-  //      starboard_overcurrent = 0;
-  //      port_overcurrent = 0;
-  //      lastResetTime = currentMillis;
-  //    }
-  //
-  //  } else {
-  //    lastResetTime = currentMillis;
-  //  }
-  //
+
 }// End Loop
