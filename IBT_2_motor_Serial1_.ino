@@ -22,7 +22,7 @@
 
 // Command and telemetry codes
 #define DISENGAGE_CODE 0x68
-#define ENGAGE_CODE 0x36
+#define ENGAGE_CODE 0x37
 #define COMMAND_CODE 0xC7
 #define CONTROLLER_TEMP_CODE 0xf9
 #define MAX_CURRENT_CODE 0x1E // current in units of 10mA
@@ -45,6 +45,16 @@
 #define EEPROM_VALUE_CODE 0x9a
 #define OVERCURRENT_FAULT 4
 #define SYNC 1
+#define ENGAGED 8
+#define INVALID 16
+#define PORT_PIN_FAULT 32
+#define STARBOARD_PIN_FAULT 64
+#define BADVOLTAGE 128
+#define MIN_RUDDER 256
+#define MAX_RUDDER 512
+#define CURRENT_RANGE 1024
+#define BAD_FUSES 2048
+#define REBOOTED 32768
 
 // Handshake and telemetry codes for Pypilot detection
 #define HANDSHAKE_CODE 0x5A
@@ -60,13 +70,14 @@ int maxSlewRate = 20;   // Example max slew rate 1 to 100
 int max_slew_slow = 20;  // Example max slew rate 1 to 100
 bool motorEngaged = false;
 bool debugMode = false;  // Toggle debug mode
-uint16_t flags;
+uint16_t flags = SYNC; // Initialize with SYNC and REBOOTED
+bool isSynced = true; // Ensure SYNC is set from start
 int port_starboard_direction; //Sets the present motor direction 1=port 2=strarboard
 int starboard_overcurrent = 0; // Flag
 int port_overcurrent = 0;
 int PortValue = 0;
 int StarboardValue = 0;
-
+static int16_t rudderSense = 0; // Simulated rudder position
 
 // Define variables for feedback
 float controllerTemp = 25.0; // Example starting temperature for controller
@@ -90,31 +101,32 @@ void debugLog(const char* message) {
   }
 }
 
-void stop_port()
-{
+void stop_port() {
   stopMotor();
   port_overcurrent = 1;
+  rudderSense = 3000; // Max port position
   Serial.println("Port overCurrent");
-
 }
 
-void stop_starboard()
-{
+void stop_starboard() {
   stopMotor();
   starboard_overcurrent = 1;
+  rudderSense = -3000; // Max starboard position
   Serial.println("Starboard overCurrent");
-
 }
 
 
 void resetFaults() {
-  // Reset all fault flags
-  flags &= ~(OVERCURRENT_FAULT);//  add fauld to reset to the list here
-
-  // Debug output for confirmation
-  if (debugMode) {
-    Serial.println("All faults have been reset.");
-  }
+  port_overcurrent = false;
+//  starboard_overcurrent = false;
+//  portFaultTime = 0;
+//  starboardFaultTime = 0;
+//  port_starboard_direction = 0;
+//  stopMotor();
+//  rudderSense = 0; // Reset rudder position
+  flags &= ~(OVERCURRENT_FAULT | PORT_PIN_FAULT | STARBOARD_PIN_FAULT | MIN_RUDDER | MAX_RUDDER);
+ // if (debugMode) 
+  Serial.println("Faults reset");
 }
 
 void stopMotor() {
@@ -211,65 +223,83 @@ void setMotorSpeed(int speed) {
     }
   }
 }
+
+
 void sendFeedback() {
+  if (Serial1.availableForWrite() < 32) return; // Skip if buffer nearly full
+
   uint8_t feedback[4];
 
-  // Send Current Feedback
-  uint16_t currentAmpsInt = static_cast<uint16_t>(rollingAverageCurrent); // current in units of 10mA
+//  // Update rudder position based on motor direction
+//  if (port_starboard_direction == 1 && motorEngaged && !port_overcurrent && PortValue != LOW) {
+//   // rudderSense += 5; // Port
+//  } else if (port_starboard_direction == 2 && motorEngaged && !starboard_overcurrent && StarboardValue != LOW) {
+//  //  rudderSense -= 5; // Starboard
+//  }
+//  if (rudderSense > 1000) rudderSense = 1000;
+//  if (rudderSense < -1000) rudderSense = -1000;
+
+  // Current Feedback (units: 10mA)
+  uint16_t currentAmpsInt = static_cast<uint16_t>(rollingAverageCurrent);
   feedback[0] = CURRENT_CODE;
   feedback[1] = currentAmpsInt & 0xFF;
   feedback[2] = (currentAmpsInt >> 8) & 0xFF;
-  feedback[3] = crc8(feedback, 3); // Calculate CRC
+  feedback[3] = crc8(feedback, 3);
   Serial1.write(feedback, 4);
 
-  // Send Voltage Feedback
-  uint16_t voltageInt = static_cast<uint16_t>(voltage * 100); // voltage in 10mV increments
+  // Voltage Feedback (units: 10mV)
+  uint16_t voltageInt = static_cast<uint16_t>(voltage * 100);
   feedback[0] = VOLTAGE_CODE;
   feedback[1] = voltageInt & 0xFF;
   feedback[2] = (voltageInt >> 8) & 0xFF;
-  feedback[3] = crc8(feedback, 3); // Calculate CRC
+  feedback[3] = crc8(feedback, 3);
   Serial1.write(feedback, 4);
 
-  // Send Controller Temperature Feedback
-  uint16_t controllerTempInt = static_cast<uint16_t>(controllerTemp); // Replace with actual controller temperature value
+  // Controller Temperature Feedback (units: °C)
+  uint16_t controllerTempInt = static_cast<uint16_t>(controllerTemp);
   feedback[0] = CONTROLLER_TEMP_CODE;
   feedback[1] = controllerTempInt & 0xFF;
   feedback[2] = (controllerTempInt >> 8) & 0xFF;
-  feedback[3] = crc8(feedback, 3); // Calculate CRC
+  feedback[3] = crc8(feedback, 3);
   Serial1.write(feedback, 4);
 
-  // Send Motor Temperature Feedback
-  uint16_t motorTempInt = static_cast<uint16_t>(motorTemp); // Replace with actual motor temperature value
+  // Motor Temperature Feedback (units: °C)
+  uint16_t motorTempInt = static_cast<uint16_t>(motorTemp);
   feedback[0] = MOTOR_TEMP_CODE;
   feedback[1] = motorTempInt & 0xFF;
   feedback[2] = (motorTempInt >> 8) & 0xFF;
-  feedback[3] = crc8(feedback, 3); // Calculate CRC
+  feedback[3] = crc8(feedback, 3);
   Serial1.write(feedback, 4);
 
+//  // Rudder Feedback
+//  feedback[0] = RUDDER_SENSE_CODE;
+//  feedback[1] = rudderSense & 0xFF;
+//  feedback[2] = (rudderSense >> 8) & 0xFF;
+//  feedback[3] = crc8(feedback, 3);
+//  Serial1.write(feedback, 4);
 
-  // Send Flags Feedback (including faults)
-  uint8_t faultFlags = 0;
-
-  // Check for overcurrent fault
+  // Flags Feedback
+  uint16_t faultFlags = flags; // Start with global flags (SYNC, REBOOTED)
   if (rollingAverageCurrent > currentLimit) {
-    faultFlags |= OVERCURRENT_FAULT; // Set overcurrent fault flag
+    faultFlags |= OVERCURRENT_FAULT;
   }
-
-
-  flags = faultFlags;
+  if (motorEngaged) {
+    faultFlags |= ENGAGED;
+  }
+//  if (port_overcurrent || PortValue == LOW) {
+//    faultFlags |= PORT_PIN_FAULT | MIN_RUDDER;
+//  }
+//  if (starboard_overcurrent || StarboardValue == LOW) {
+//    faultFlags |= STARBOARD_PIN_FAULT | MAX_RUDDER;
+//  }
   feedback[0] = FLAGS_CODE;
-  feedback[1] = faultFlags; // Send fault flags (overcurrent, rudder faults)
-  feedback[2] = 0; // Reserved byte
-  feedback[3] = crc8(feedback, 3); // Calculate CRC
+  feedback[1] = faultFlags & 0xFF;
+  feedback[2] = (faultFlags >> 8) & 0xFF;
+  feedback[3] = crc8(feedback, 3);
   Serial1.write(feedback, 4);
 
-  // Debug Mode Output
-  if (debugMode) {
-    Serial.println("All feedback sent.");
-    if (faultFlags & OVERCURRENT_FAULT) {
-      Serial.println("Overcurrent fault detected!");
-    }
-
+  if (debugMode && (faultFlags & OVERCURRENT_FAULT)) {
+    Serial.println("Overcurrent fault detected!");
   }
 }
 
@@ -287,115 +317,124 @@ void sendHandshake() {
 
 
 void parseCommand(uint8_t *command) {
+  static unsigned long lastCommandTime = 0; // Track last command time
   uint8_t cmd = command[0];
   uint16_t value = command[1] | (command[2] << 8);
 
+  isSynced = true;
+  lastCommandTime = millis();
+
+  // Log raw packet for debugging
   if (debugMode) {
-    Serial.print("Received command: ");
+    Serial.print("Received packet: ");
+    for (int i = 0; i < 4; i++) {
+      Serial.print("0x");
+      Serial.print(command[i], HEX);
+      Serial.print(" ");
+    }
+    Serial.println();
+    Serial.print("Command: 0x");
     Serial.print(cmd, HEX);
     Serial.print(", value: ");
     Serial.println(value);
   }
 
+  uint8_t feedback[4];
   switch (cmd) {
+    case HANDSHAKE_CODE: // 0x5A
+      feedback[0] = HANDSHAKE_CODE;
+      feedback[1] = 0x00;
+      feedback[2] = 0x00;
+      feedback[3] = crc8(feedback, 3);
+      Serial1.write(feedback, 4);
+      if (debugMode) Serial.println("Sent handshake response");
+      break;
     case DISENGAGE_CODE:
       stopMotor();
-      if (debugMode) {
-        Serial.print("DISENGAGE CODE: ");
-        Serial.println(value);
-      }
-
       break;
-
     case RESET_CODE:
       resetFaults();
-      if (debugMode) {
-        Serial.println("RESET command received. Faults reset.");
-      }
       break;
-
-    case ENGAGE_CODE: //
-      //setMotorSpeed(value);
-      if (debugMode) {
-        Serial.print("ENGAGE CODE: ");
-        Serial.println(value);
-      }
+    case ENGAGE_CODE:
+      motorEngaged = true;
       break;
-
-    case COMMAND_CODE: // Includes speed and direction control
+    case COMMAND_CODE:
       setMotorSpeed(value);
-      if (debugMode) {
-        Serial.print("MOTOR SPEED CODE: ");
-        Serial.println(value);
-      }
       break;
-
-    case MAX_CONTROLLER_TEMP_CODE:
-      if (debugMode) {
-        Serial.print("Max controller temperature set to: ");
-        Serial.println(value);
-      }
-      break;
-
-    case MAX_CURRENT_CODE:// current in units of 10mA
+    case MAX_CURRENT_CODE:
       currentLimit = value;
-      if (debugMode) {
-        Serial.print("Max current set to: ");
-        Serial.println(currentLimit);
-        Serial.print("Max current: ");
-        Serial.println(rollingAverageCurrent * .01, 2); // back to amps
-      }
       break;
-
-    case MAX_MOTOR_TEMP_CODE: //not used here
-      maxMotorTemp = value;
-      //      if (debugMode) {
-      //        Serial.print("Max motor temperature set to: ");
-      //        Serial.println(maxMotorTemp);
-      //      }
-      break;
-
-
     case MAX_SLEW_CODE:
-      // Ensure buffer has enough data
       maxSlewRate = command[1];
       max_slew_slow = command[2];
+      break;
+    case EEPROM_READ_CODE:
+      {
+        uint16_t address = value;
+        // Send multiple EEPROM responses
+        // Address 0: Max current
+        feedback[0] = EEPROM_VALUE_CODE;
+        feedback[1] = currentLimit & 0xFF;
+        feedback[2] = (currentLimit >> 8) & 0xFF;
+        feedback[3] = crc8(feedback, 3);
+        Serial1.write(feedback, 4);
+        delay(10);
+        if (debugMode) Serial.println("Sent EEPROM response for address 0");
 
-      // if set at the end of range (up to 255)  no slew limit
-      if (maxSlewRate > 250)
-        maxSlewRate = 255;
-      if (max_slew_slow > 250)
-        max_slew_slow = 255;
-      // must have some slew
-      if (maxSlewRate < 1)
-        maxSlewRate = 1;
-      if (max_slew_slow < 1)
-        max_slew_slow = 1;
+        // Address 2: Config flags
+        feedback[0] = EEPROM_VALUE_CODE;
+        feedback[1] = 0x01; // Indicate basic motor type
+        feedback[2] = 0x00;
+        feedback[3] = crc8(feedback, 3);
+        Serial1.write(feedback, 4);
+        delay(10);
+        if (debugMode) Serial.println("Sent EEPROM response for address 2");
 
-
-      if (debugMode) {
-        //        Serial.print("Max slew rate set to: ");
-        //        Serial.println(maxSlewRate);
-        //        Serial.print("Max slew SLOW set to: ");
-        //        Serial.println(max_slew_slow);
-
+        // Address 4: Rudder range
+        uint16_t range = 4000; // Try larger range
+        feedback[0] = EEPROM_VALUE_CODE;
+        feedback[1] = range & 0xFF;
+        feedback[2] = (range >> 8) & 0xFF;
+        feedback[3] = crc8(feedback, 3);
+        Serial1.write(feedback, 4);
+        delay(10);
+        if (debugMode) Serial.println("Sent EEPROM response for address 4");
       }
       break;
-
-    case EEPROM_READ_CODE: //not used here
-      //      if (debugMode) {
-      //        Serial.print("EEPROM read request received for address: ");
-      //        Serial.println(value);
-      //      }
-      //      // Add EEPROM read functionality here
+    case EEPROM_WRITE_CODE:
+      feedback[0] = EEPROM_VALUE_CODE;
+      feedback[1] = 0x00;
+      feedback[2] = 0x00;
+      feedback[3] = crc8(feedback, 3);
+      Serial1.write(feedback, 4);
       break;
-
+    case RUDDER_RANGE_CODE:
+      feedback[0] = RUDDER_RANGE_CODE;
+      uint16_t range = 4000; // Match EEPROM range
+      feedback[1] = range & 0xFF;
+      feedback[2] = (range >> 8) & 0xFF;
+      feedback[3] = crc8(feedback, 3);
+      Serial1.write(feedback, 4);
+      break;
+    case REPROGRAM_CODE:
+      feedback[0] = REPROGRAM_CODE;
+      feedback[1] = 0x00;
+      feedback[2] = 0x00;
+      feedback[3] = crc8(feedback, 3);
+      Serial1.write(feedback, 4);
+      break;
     default:
       if (debugMode) {
-        Serial.print("........................Unknown command received: ");
+        Serial.print("Unknown command: 0x");
         Serial.println(cmd, HEX);
       }
       break;
+  }
+
+  // Reset SYNC if no commands for 2 seconds
+  if (millis() - lastCommandTime > 2000) {
+    isSynced = false;
+    flags &= ~SYNC; // Clear SYNC flag
   }
 }
 
@@ -407,25 +446,22 @@ bool verifyCRC(uint8_t *data) {
 void setup() {
   Serial.begin(115200);
   Serial1.begin(38400);
+ // Serial1.setRxBufferSize(256); // Increase buffer
 
   pinMode(RPWM, OUTPUT);
   pinMode(LPWM, OUTPUT);
   pinMode(REN, OUTPUT);
-  pinMode(Port_Switch_pin, INPUT_PULLUP); // Ground the pins to activate
+  pinMode(Port_Switch_pin, INPUT_PULLUP);
   pinMode(Starboard_Switch_pin, INPUT_PULLUP);
   pinMode(IS_PINS, INPUT);
 
   speed = 1000;
   stopMotor();
   digitalWrite(REN, HIGH);
- // digitalWrite(Starboard_Switch_pin, LOW);
- // digitalWrite(Port_Switch_pin, LOW);
 
   Serial.println("Arduino motor controller initialized");
 
-
-
-  // Send initial handshake for Pypilot detection
+  // Send initial handshake
   sendHandshake();
 }
 
@@ -437,11 +473,9 @@ void loop() {
     uint8_t receivedByte = Serial1.read();
     buffer[bufferIndex++] = receivedByte;
 
-
     if (bufferIndex == 4) {
       if (verifyCRC(buffer)) {
         parseCommand(buffer);
-        sendFeedback();
       } else {
         Serial.println("Invalid CRC received");
       }
@@ -451,22 +485,20 @@ void loop() {
 
   // Read the current sense value
   int currentSenseRaw = analogRead(IS_PINS);
-  currentAmps = floatMap(currentSenseRaw, 0, 1023, 0, 4300); // Amps to be determined. Must read the datasheet
+  currentAmps = floatMap(currentSenseRaw, 0, 1023, 0, 4300); // Units: 10mA
 
   // Update rolling average
   currentAmpsHistory[currentAmpsIndex] = currentAmps;
   currentAmpsIndex = (currentAmpsIndex + 1) % ROLLING_AVG_SIZE;
-
   rollingAverageCurrent = 0.0;
   for (int i = 0; i < ROLLING_AVG_SIZE; i++) {
     rollingAverageCurrent += currentAmpsHistory[i];
   }
   rollingAverageCurrent /= ROLLING_AVG_SIZE;
 
-  ////////////////////////////////////////////////////////////////////////////
   // Stop motor if rolling average exceeds current limit
   if (rollingAverageCurrent > currentLimit) {
-    if (port_starboard_direction == 1) { // Check which side to stop
+    if (port_starboard_direction == 1) {
       stop_port();
     }
     if (port_starboard_direction == 2) {
@@ -477,40 +509,34 @@ void loop() {
       Serial.print("Max current set to: ");
       Serial.println(currentLimit);
       Serial.print("Max current: ");
-      Serial.println(rollingAverageCurrent * .01, 2); // back to amps
+      Serial.println(rollingAverageCurrent * 0.01, 2);
     }
   }
+
   PortValue = digitalRead(Port_Switch_pin);
-  if (port_starboard_direction == 1) { // Check which side to stop
-    if (PortValue == LOW) { // if the pin is LOW stop the motor
-      stop_port();
-    }
+  if (port_starboard_direction == 1 && PortValue == LOW) {
+    stop_port();
   }
+
   StarboardValue = digitalRead(Starboard_Switch_pin);
-  if (port_starboard_direction == 2) {
-    if (StarboardValue == LOW) { // if the pin is LOW stop the motor
-     
-      stop_starboard();
-    }
+  if (port_starboard_direction == 2 && StarboardValue == LOW) {
+    stop_starboard();
   }
 
-
-  //////////////////////////////////////////////////////////////////
+  // Periodic tasks
   static unsigned long lastFeedbackTime = 0;
   static unsigned long lastHandshakeTime = 0;
-  static unsigned long lastResetTime = 0;
   unsigned long currentMillis = millis();
 
   // Send telemetry feedback every 100ms
   if (currentMillis - lastFeedbackTime > 100) {
-    // sendFeedback();
+    sendFeedback();
     lastFeedbackTime = currentMillis;
   }
 
-  // Send handshake every 1000ms to ensure detection
+  // Send handshake every 1000ms
   if (currentMillis - lastHandshakeTime > 1000) {
     sendHandshake();
     lastHandshakeTime = currentMillis;
   }
-
-}// End Loop
+}
