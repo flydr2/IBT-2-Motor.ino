@@ -5,6 +5,8 @@
 //'********** This uses Serial1 on arduino Mega.************
 // Added rudder limit switches (should ground them if not used)
 
+//Todo... Register correctly to pypilot and add Faults as required
+
 #include <Arduino.h>
 #include "crc.h" // Ensure crc.h is available for CRC calculations
 
@@ -175,7 +177,7 @@ void setMotorSpeed(int speed) {
     if (starboard_overcurrent == 0) {
       analogWrite(RPWM, 0);
       analogWrite(LPWM, targetSpeed);
-      Serial.print("..................Motor engaged, STARBOARD speed (0-255): ");
+      Serial.print("..Motor engaged, STARBOARD speed (0-255): ");
       Serial.println(targetSpeed);
       Serial.print("Max current: ");
       Serial.println(rollingAverageCurrent * .01, 2); // back to amps
@@ -183,17 +185,19 @@ void setMotorSpeed(int speed) {
       stop_starboard();
     }
     if (debugMode) {
-      Serial.print("..................Motor engaged, STARBOARD speed (0-255): ");
+      Serial.print("..Motor engaged, STARBOARD speed (0-255): ");
       Serial.println(targetSpeed);
+      Serial.print("Max current: ");
+      Serial.println(rollingAverageCurrent * .01, 2); // back to amps
     }
 
-  } else if (speed > 1000) { // PORT
+  } else if (speed > 1000) { // TURNING TO PORT
     port_starboard_direction = 1; // 1 is port
     starboard_overcurrent = 0; // reset the overcurrent port fault because we go in the opposite direction
     if (port_overcurrent == 0) {
       analogWrite(LPWM, 0);
       analogWrite(RPWM, targetSpeed);
-      Serial.print("..................Motor engaged, PORT speed (0-255): ");
+      Serial.print("..Motor engaged, PORT speed (0-255): ");
       Serial.println(targetSpeed);
       Serial.print("Max current: ");
       Serial.println(rollingAverageCurrent * .01, 2); // back to amps
@@ -202,7 +206,7 @@ void setMotorSpeed(int speed) {
       stop_port();
     }
     if (debugMode) {
-      Serial.print("..................Motor engaged, PORT speed (0-255): ");
+      Serial.print("..Motor engaged, PORT speed (0-255): ");
       Serial.println(targetSpeed);
     }
   }
@@ -407,14 +411,15 @@ void setup() {
   pinMode(RPWM, OUTPUT);
   pinMode(LPWM, OUTPUT);
   pinMode(REN, OUTPUT);
-  pinMode(Port_Switch_pin, INPUT);
-  pinMode(Starboard_Switch_pin, INPUT);
+  pinMode(Port_Switch_pin, INPUT_PULLUP); // Ground the pins to activate
+  pinMode(Starboard_Switch_pin, INPUT_PULLUP);
   pinMode(IS_PINS, INPUT);
 
   speed = 1000;
   stopMotor();
   digitalWrite(REN, HIGH);
-
+ // digitalWrite(Starboard_Switch_pin, LOW);
+ // digitalWrite(Port_Switch_pin, LOW);
 
   Serial.println("Arduino motor controller initialized");
 
@@ -457,8 +462,8 @@ void loop() {
     rollingAverageCurrent += currentAmpsHistory[i];
   }
   rollingAverageCurrent /= ROLLING_AVG_SIZE;
-  
-////////////////////////////////////////////////////////////////////////////
+
+  ////////////////////////////////////////////////////////////////////////////
   // Stop motor if rolling average exceeds current limit
   if (rollingAverageCurrent > currentLimit) {
     if (port_starboard_direction == 1) { // Check which side to stop
@@ -477,13 +482,14 @@ void loop() {
   }
   PortValue = digitalRead(Port_Switch_pin);
   if (port_starboard_direction == 1) { // Check which side to stop
-    if (PortValue == 1) { // if the pin is HIGH stop the motor
+    if (PortValue == LOW) { // if the pin is LOW stop the motor
       stop_port();
     }
   }
   StarboardValue = digitalRead(Starboard_Switch_pin);
   if (port_starboard_direction == 2) {
-    if (StarboardValue == 1) { // if the pin is HIGH stop the motor
+    if (StarboardValue == LOW) { // if the pin is LOW stop the motor
+     
       stop_starboard();
     }
   }
