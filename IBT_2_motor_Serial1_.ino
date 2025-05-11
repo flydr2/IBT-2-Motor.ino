@@ -466,22 +466,42 @@ void setup() {
 }
 
 void loop() {
-  static uint8_t buffer[4];
-  static uint8_t bufferIndex = 0;
+static uint8_t buffer[4];
+static uint8_t bufferIndex = 0;
+static uint8_t invalidCrcCount = 0;
+const uint8_t MAX_INVALID_CRC = 5; // Retry threshold
 
-  while (Serial1.available() > 0) {
+// Process one byte per loop iteration
+if (Serial1.available() > 0) {
+  if (bufferIndex >= 4) {
+    if (debugMode) Serial.println("Buffer overflow, resetting");
+    bufferIndex = 0;
+    invalidCrcCount++;
+  } else {
     uint8_t receivedByte = Serial1.read();
     buffer[bufferIndex++] = receivedByte;
-
     if (bufferIndex == 4) {
       if (verifyCRC(buffer)) {
         parseCommand(buffer);
+        invalidCrcCount = 0; // Reset on valid packet
       } else {
-        Serial.println("Invalid CRC received");
+        invalidCrcCount++;
+        if (debugMode) {
+          Serial.print("Invalid CRC received, count: ");
+          Serial.println(invalidCrcCount);
+        }
       }
       bufferIndex = 0;
     }
   }
+  // Flush serial buffer and retry after too many invalid packets
+  if (invalidCrcCount >= MAX_INVALID_CRC) {
+    while (Serial1.available() > 0) Serial1.read(); // Clear buffer
+    invalidCrcCount = 0;
+    if (debugMode) Serial.println("Flushed Serial1 due to excessive invalid CRCs");
+    sendHandshake(); // Re-initiate communication
+  }
+}
 
   // Read the current sense value
   int currentSenseRaw = analogRead(IS_PINS);
