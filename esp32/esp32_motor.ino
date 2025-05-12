@@ -1,22 +1,23 @@
-// Ported for esp32 but not tested yet.
-
-
 #include <Arduino.h>
-#include "crc.h" // Ensure crc.h is available or include CRC function
+#include <HardwareSerial.h> // ESP32-specific serial library
+#include "crc.h" // Original crc.h for CRC calculations
 
 // Pin definitions for ESP32
-#define RPWM 26 // GPIO26 (PWM-capable)
-#define LPWM 27 // GPIO27 (PWM-capable)
-#define REN 14  // GPIO14 (REN/LEN tied together)
-#define IS_PINS 34 // GPIO34 (ADC1_CH6, input-only)
-#define Port_Switch_pin 32 // GPIO32 (rudder limit switch)
-#define Starboard_Switch_pin 33 // GPIO33 (rudder limit switch)
+#define RPWM 25  // PWM pin for right (starboard) motor direction
+#define LPWM 26  // PWM pin for left (port) motor direction
+#define REN  27  // Enable pin for motor driver (REN and LEN tied together)
+#define IS_PINS 34 // Analog input for current sensing (ADC1_6)
+#define Port_Switch_pin 32 // Rudder limit switch (port)
+#define Starboard_Switch_pin 33 // Rudder limit switch (starboard)
 
-// PWM configuration
-#define PWM_CHANNEL_R 0 // LEDC channel for RPWM
-#define PWM_CHANNEL_L 1 // LEDC channel for LPWM
-#define PWM_FREQ 10000  // 10 kHz
+// PWM settings for ESP32
+#define PWM_FREQ 10000   // PWM frequency (Hz)
 #define PWM_RESOLUTION 8 // 8-bit resolution (0–255)
+
+// Serial port for pypilot communication
+HardwareSerial SerialPypilot(2); // Use UART2
+#define RX_PIN 16 // RX pin for UART2
+#define TX_PIN 17 // TX pin for UART2
 
 // Command and telemetry codes
 #define DISENGAGE_CODE 0x68
@@ -59,12 +60,12 @@
 int speed = 1000;
 float currentAmps = 0.0;
 float voltage = 12.0;
-int currentLimit = 1024;
+int currentLimit = 4096; // Adjusted for 12-bit ADC (calibrate)
 int maxMotorTemp = 100;
 int maxSlewRate = 20;
 int max_slew_slow = 20;
 bool motorEngaged = false;
-bool debugMode = true;
+bool debugMode = true; // Enable for debugging
 uint16_t flags = SYNC | REBOOTED;
 bool isSynced = true;
 int port_starboard_direction;
@@ -80,7 +81,7 @@ float currentAmpsHistory[ROLLING_AVG_SIZE] = {0.0};
 int currentAmpsIndex = 0;
 float rollingAverageCurrent = 0.0;
 
-// Custom floatMap function
+// Custom floatMap function (adjusted for 12-bit ADC)
 float floatMap(float value, float inMin, float inMax, float outMin, float outMax) {
   if (inMax == inMin) return outMin;
   return (value - inMin) * (outMax - outMin) / (inMax - inMin) + outMin;
@@ -95,7 +96,7 @@ void debugLog(const char* message) {
 void stop_port() {
   stopMotor();
   port_overcurrent = 1;
-  rudderSense = 3000;
+  rudderSense = 3000; // Indicate port limit
   flags |= PORT_PIN_FAULT | MIN_RUDDER;
   Serial.println("Port overCurrent");
 }
@@ -103,21 +104,23 @@ void stop_port() {
 void stop_starboard() {
   stopMotor();
   starboard_overcurrent = 1;
-  rudderSense = -3000;
+  rudderSense = -3000; // Indicate starboard limit
   flags |= STARBOARD_PIN_FAULT | MAX_RUDDER;
   Serial.println("Starboard overCurrent");
 }
 
 void resetFaults() {
-  port_overcurrent = false;
-  starboard_overcurrent = false;
+  port_overcurrent = 0;
+  starboard_overcurrent = 0;
   flags &= ~(OVERCURRENT_FAULT | PORT_PIN_FAULT | STARBOARD_PIN_FAULT | MIN_RUDDER | MAX_RUDDER);
-  Serial.println("Faults reset");
+  if (debugMode) {
+    Serial.println("All faults have been reset.");
+  }
 }
 
 void stopMotor() {
-  ledcWrite(PWM_CHANNEL_R, 0);
-  ledcWrite(PWM_CHANNEL_L, 0);
+  ledcWrite(RPWM, 0); // Use pin directly in v3.0
+  ledcWrite(LPWM, 0);
   speed = 1000;
   motorEngaged = false;
   debugLog("Motor stopped");
@@ -156,10 +159,10 @@ void setMotorSpeed(int speed) {
     port_starboard_direction = 2;
     port_overcurrent = 0;
     if (starboard_overcurrent == 0 && StarboardValue != LOW) {
-      ledcWrite(PWM_CHANNEL_R, 0);
-      ledcWrite(PWM_CHANNEL_L, targetSpeed);
+      ledcWrite(RPWM, 0);
+      ledcWrite(LPWM, targetSpeed);
       if (debugMode) {
-        Serial.print("..Motor engaged, STARBOARD speed (0-255): ");
+        Serial.print("Motor engaged, STARBOARD speed (0-255): ");
         Serial.println(targetSpeed);
         Serial.print("Max current: ");
         Serial.println(rollingAverageCurrent * 0.01, 2);
@@ -171,10 +174,10 @@ void setMotorSpeed(int speed) {
     port_starboard_direction = 1;
     starboard_overcurrent = 0;
     if (port_overcurrent == 0 && PortValue != LOW) {
-      ledcWrite(PWM_CHANNEL_L, 0);
-      ledcWrite(PWM_CHANNEL_R, targetSpeed);
+      ledcWrite(LPWM, 0);
+      ledcWrite(RPWM, targetSpeed);
       if (debugMode) {
-        Serial.print("..Motor engaged, PORT speed (0-255): ");
+        Serial.print("Motor engaged, PORT speed (0-255): ");
         Serial.println(targetSpeed);
         Serial.print("Max current: ");
         Serial.println(rollingAverageCurrent * 0.01, 2);
@@ -186,7 +189,7 @@ void setMotorSpeed(int speed) {
 }
 
 void sendFeedback() {
-  if (Serial2.availableForWrite() < 32) return;
+  if (SerialPypilot.availableForWrite() < 32) return;
 
   uint8_t feedback[4];
 
@@ -196,7 +199,7 @@ void sendFeedback() {
   feedback[1] = currentAmpsInt & 0xFF;
   feedback[2] = (currentAmpsInt >> 8) & 0xFF;
   feedback[3] = crc8(feedback, 3);
-  Serial2.write(feedback, 4);
+  SerialPypilot.write(feedback, 4);
 
   // Voltage Feedback (units: 10mV)
   uint16_t voltageInt = static_cast<uint16_t>(voltage * 100);
@@ -204,7 +207,7 @@ void sendFeedback() {
   feedback[1] = voltageInt & 0xFF;
   feedback[2] = (voltageInt >> 8) & 0xFF;
   feedback[3] = crc8(feedback, 3);
-  Serial2.write(feedback, 4);
+  SerialPypilot.write(feedback, 4);
 
   // Controller Temperature Feedback
   uint16_t controllerTempInt = static_cast<uint16_t>(controllerTemp);
@@ -212,7 +215,7 @@ void sendFeedback() {
   feedback[1] = controllerTempInt & 0xFF;
   feedback[2] = (controllerTempInt >> 8) & 0xFF;
   feedback[3] = crc8(feedback, 3);
-  Serial2.write(feedback, 4);
+  SerialPypilot.write(feedback, 4);
 
   // Motor Temperature Feedback
   uint16_t motorTempInt = static_cast<uint16_t>(motorTemp);
@@ -220,14 +223,14 @@ void sendFeedback() {
   feedback[1] = motorTempInt & 0xFF;
   feedback[2] = (motorTempInt >> 8) & 0xFF;
   feedback[3] = crc8(feedback, 3);
-  Serial2.write(feedback, 4);
+  SerialPypilot.write(feedback, 4);
 
   // Rudder Feedback
   feedback[0] = RUDDER_SENSE_CODE;
   feedback[1] = rudderSense & 0xFF;
   feedback[2] = (rudderSense >> 8) & 0xFF;
   feedback[3] = crc8(feedback, 3);
-  Serial2.write(feedback, 4);
+  SerialPypilot.write(feedback, 4);
 
   // Flags Feedback
   uint16_t faultFlags = flags;
@@ -247,7 +250,7 @@ void sendFeedback() {
   feedback[1] = faultFlags & 0xFF;
   feedback[2] = (faultFlags >> 8) & 0xFF;
   feedback[3] = crc8(feedback, 3);
-  Serial2.write(feedback, 4);
+  SerialPypilot.write(feedback, 4);
 
   if (debugMode && (faultFlags & OVERCURRENT_FAULT)) {
     Serial.println("Overcurrent fault detected!");
@@ -260,7 +263,7 @@ void sendHandshake() {
   handshake[1] = 0x00;
   handshake[2] = 0x00;
   handshake[3] = crc8(handshake, 3);
-  Serial2.write(handshake, 4);
+  SerialPypilot.write(handshake, 4);
 }
 
 void parseCommand(uint8_t *command) {
@@ -292,7 +295,7 @@ void parseCommand(uint8_t *command) {
       feedback[1] = 0x00;
       feedback[2] = 0x00;
       feedback[3] = crc8(feedback, 3);
-      Serial2.write(feedback, 4);
+      SerialPypilot.write(feedback, 4);
       if (debugMode) Serial.println("Sent handshake response");
       break;
     case DISENGAGE_CODE:
@@ -309,19 +312,34 @@ void parseCommand(uint8_t *command) {
       break;
     case MAX_CURRENT_CODE:
       currentLimit = value;
+      if (debugMode) {
+        Serial.print("Max current set to: ");
+        Serial.println(currentLimit * 0.01, 2);
+        Serial.print("Current: ");
+        Serial.println(rollingAverageCurrent * 0.01, 2);
+      }
       break;
     case MAX_SLEW_CODE:
       maxSlewRate = command[1];
       max_slew_slow = command[2];
+      if (maxSlewRate > 250) maxSlewRate = 250;
+      if (max_slew_slow > 250) max_slew_slow = 250;
+      if (maxSlewRate < 1) maxSlewRate = 1;
+      if (max_slew_slow < 1) max_slew_slow = 1;
+      if (debugMode) {
+        Serial.print("Max slew rate: ");
+        Serial.println(maxSlewRate);
+        Serial.print("Max slew slow: ");
+        Serial.println(max_slew_slow);
+      }
       break;
     case EEPROM_READ_CODE:
       {
-        uint16_t address = value;
         feedback[0] = EEPROM_VALUE_CODE;
         feedback[1] = currentLimit & 0xFF;
         feedback[2] = (currentLimit >> 8) & 0xFF;
         feedback[3] = crc8(feedback, 3);
-        Serial2.write(feedback, 4);
+        SerialPypilot.write(feedback, 4);
         delay(10);
         if (debugMode) Serial.println("Sent EEPROM response for address 0");
 
@@ -329,16 +347,16 @@ void parseCommand(uint8_t *command) {
         feedback[1] = 0x01;
         feedback[2] = 0x00;
         feedback[3] = crc8(feedback, 3);
-        Serial2.write(feedback, 4);
+        SerialPypilot.write(feedback, 4);
         delay(10);
         if (debugMode) Serial.println("Sent EEPROM response for address 2");
 
-        uint16_t range = 4000;
+        uint16_t range = 4000; // Rudder range
         feedback[0] = EEPROM_VALUE_CODE;
         feedback[1] = range & 0xFF;
         feedback[2] = (range >> 8) & 0xFF;
         feedback[3] = crc8(feedback, 3);
-        Serial2.write(feedback, 4);
+        SerialPypilot.write(feedback, 4);
         delay(10);
         if (debugMode) Serial.println("Sent EEPROM response for address 4");
       }
@@ -348,22 +366,27 @@ void parseCommand(uint8_t *command) {
       feedback[1] = 0x00;
       feedback[2] = 0x00;
       feedback[3] = crc8(feedback, 3);
-      Serial2.write(feedback, 4);
+      SerialPypilot.write(feedback, 4);
+      if (debugMode) Serial.println("EEPROM write acknowledged");
       break;
     case RUDDER_RANGE_CODE:
-      feedback[0] = RUDDER_RANGE_CODE;
-      uint16_t range = 4000;
-      feedback[1] = range & 0xFF;
-      feedback[2] = (range >> 8) & 0xFF;
-      feedback[3] = crc8(feedback, 3);
-      Serial2.write(feedback, 4);
+      {
+        uint16_t range = 4000;
+        feedback[0] = RUDDER_RANGE_CODE;
+        feedback[1] = range & 0xFF;
+        feedback[2] = (range >> 8) & 0xFF;
+        feedback[3] = crc8(feedback, 3);
+        SerialPypilot.write(feedback, 4);
+        if (debugMode) Serial.println("Sent rudder range");
+      }
       break;
     case REPROGRAM_CODE:
       feedback[0] = REPROGRAM_CODE;
       feedback[1] = 0x00;
       feedback[2] = 0x00;
       feedback[3] = crc8(feedback, 3);
-      Serial2.write(feedback, 4);
+      SerialPypilot.write(feedback, 4);
+      if (debugMode) Serial.println("Reprogram command acknowledged");
       break;
     default:
       if (debugMode) {
@@ -380,30 +403,26 @@ void parseCommand(uint8_t *command) {
 }
 
 bool verifyCRC(uint8_t *data) {
-  uint8_t crc = crc8(data, 3);
-  return crc == data[3];
+  return crc8(data, 3) == data[3];
 }
 
 void setup() {
   Serial.begin(115200);
-  Serial2.begin(38400); // Use Serial2 for Pypilot communication
+  SerialPypilot.begin(38400, SERIAL_8N1, RX_PIN, TX_PIN);
 
-  // Configure PWM
-  ledcSetup(PWM_CHANNEL_R, PWM_FREQ, PWM_RESOLUTION);
-  ledcSetup(PWM_CHANNEL_L, PWM_FREQ, PWM_RESOLUTION);
-  ledcAttachPin(RPWM, PWM_CHANNEL_R);
-  ledcAttachPin(LPWM, PWM_CHANNEL_L);
+  // Configure PWM using ESP32 core v3.0 LEDC API
+  ledcAttach(RPWM, PWM_FREQ, PWM_RESOLUTION);
+  ledcAttach(LPWM, PWM_FREQ, PWM_RESOLUTION);
 
-  // Configure pins
+  // Pin modes
   pinMode(REN, OUTPUT);
   pinMode(Port_Switch_pin, INPUT_PULLUP);
   pinMode(Starboard_Switch_pin, INPUT_PULLUP);
   pinMode(IS_PINS, INPUT);
 
   // Initialize motor
-  speed = 1000;
-  stopMotor();
   digitalWrite(REN, HIGH);
+  stopMotor();
 
   Serial.println("ESP32 motor controller initialized");
   sendHandshake();
@@ -416,13 +435,13 @@ void loop() {
   const uint8_t MAX_INVALID_CRC = 5;
 
   // Process serial data
-  if (Serial2.available() > 0) {
+  if (SerialPypilot.available() > 0) {
     if (bufferIndex >= 4) {
       if (debugMode) Serial.println("Buffer overflow, resetting");
       bufferIndex = 0;
       invalidCrcCount++;
     } else {
-      buffer[bufferIndex++] = Serial2.read();
+      buffer[bufferIndex++] = SerialPypilot.read();
       if (bufferIndex == 4) {
         if (verifyCRC(buffer)) {
           parseCommand(buffer);
@@ -438,17 +457,16 @@ void loop() {
       }
     }
     if (invalidCrcCount >= MAX_INVALID_CRC) {
-      while (Serial2.available() > 0) Serial2.read();
+      while (SerialPypilot.available() > 0) SerialPypilot.read();
       invalidCrcCount = 0;
-      if (debugMode) Serial.println("Flushed Serial2 due to excessive invalid CRCs");
+      if (debugMode) Serial.println("Flushed SerialPypilot due to excessive invalid CRCs");
       sendHandshake();
     }
   }
 
-  // Read current sense (adjusted for 3.3V ADC)
+  // Read current sense (12-bit ADC)
   int currentSenseRaw = analogRead(IS_PINS);
-  // Map to 0–4300 (10mA units), assuming voltage divider scales 5V to 3.3V max
-  currentAmps = floatMap(currentSenseRaw, 0, 4095, 0, 4300);
+  currentAmps = floatMap(currentSenseRaw, 0, 4095, 0, 4300); // Map to 0–43A (10mA units)
 
   // Update rolling average
   currentAmpsHistory[currentAmpsIndex] = currentAmps;
@@ -459,7 +477,7 @@ void loop() {
   }
   rollingAverageCurrent /= ROLLING_AVG_SIZE;
 
-  // Overcurrent check
+  // Overcurrent and limit switch checks
   if (rollingAverageCurrent > currentLimit) {
     if (port_starboard_direction == 1) {
       stop_port();
@@ -470,7 +488,7 @@ void loop() {
       Serial.println("Motor stopped due to overcurrent!");
       Serial.print("Max current set to: ");
       Serial.println(currentLimit * 0.01, 2);
-      Serial.print("Max current: ");
+      Serial.print("Current: ");
       Serial.println(rollingAverageCurrent * 0.01, 2);
     }
   }
@@ -486,7 +504,7 @@ void loop() {
     stop_starboard();
   }
 
-  // Fault pin checks (from TODO)
+  // Fault pin checks
   if (!digitalRead(Port_Switch_pin)) {
     stop_port();
     flags |= PORT_PIN_FAULT;
