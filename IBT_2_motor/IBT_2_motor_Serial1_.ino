@@ -21,9 +21,9 @@
 
 
 // Command and telemetry codes
-#define DISENGAGE_CODE 0x68
-#define ENGAGE_CODE 0x37
-#define COMMAND_CODE 0xC7
+#define DISENGAGE_CODE 0x68 // Normally used for clutch
+#define ENGAGE_CODE 0x37  // Normally used for clutch
+#define COMMAND_CODE 0xC7 // Motor speed
 #define CONTROLLER_TEMP_CODE 0xf9
 #define MAX_CURRENT_CODE 0x1E // current in units of 10mA
 #define CURRENT_CODE 0x1C
