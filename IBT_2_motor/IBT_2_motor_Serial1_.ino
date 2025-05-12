@@ -3,13 +3,30 @@
 // Make sure that the voltage at pin A1 does not go over 5v... and that 5v is 43a or rescale it in the map function
 // added current faults
 //'********** This uses Serial1 on arduino Mega.************
-// Added rudder limit switches (should ground them if not used)
+// Added rudder limit switches 
 
 //Todo... Register correctly to pypilot and add Faults as required
 
+/* Codes to implement correctly (for reference only)
+ // test fault pins
+    if(!digitalRead(port_fault_pin)) {
+        stop_port();
+        flags |= PORT_PIN_FAULT;
+    } else
+      flags &= ~PORT_PIN_FAULT;
+
+    if(!digitalRead(starboard_fault_pin)) {
+        stop_starboard();
+        flags |= STARBOARD_PIN_FAULT;
+    } else
+      flags &= ~STARBOARD_PIN_FAULT;
+
+  */
+
+//////////////////////////////////////////////////////////////////////
+
 #include <Arduino.h>
 #include "crc.h" // Ensure crc.h is available for CRC calculations
-
 
 // Pin definitions
 #define RPWM 10 //change these to your directions port/starboard
