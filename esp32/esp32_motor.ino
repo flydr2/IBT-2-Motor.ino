@@ -99,10 +99,12 @@ int StarboardValue = 0;
 static int16_t rudderSense = 0;
 float controllerTemp = 25.0;
 float motorTemp = 30.0;
-#define ROLLING_AVG_SIZE 30
+#define ROLLING_AVG_SIZE 10
 float currentAmpsHistory[ROLLING_AVG_SIZE] = {0.0};
 int currentAmpsIndex = 0;
 float rollingAverageCurrent = 0.0;
+int currentSenseRaw = 0;
+
 
 // Custom floatMap function (adjusted for 12-bit ADC)
 float floatMap(float value, float inMin, float inMax, float outMin, float outMax) {
@@ -127,18 +129,18 @@ void stopMotor() {
 void stop_port() {
   stopMotor();
   port_overcurrent = 1;
-  rudderSense = 3000; // Indicate port limit
-  flags |= MAX_RUDDER_FAULT;
-  flags &= ~(MIN_RUDDER_FAULT);
+//  rudderSense = 3000; // Indicate port limit
+//  flags |= MAX_RUDDER_FAULT;
+ // flags &= ~(MIN_RUDDER_FAULT);
   Serial.println("Port overCurrent");
 }
 
 void stop_starboard() {
   stopMotor();
   starboard_overcurrent = 1;
-  rudderSense = -3000; // Indicate starboard limit
-  flags |= MIN_RUDDER_FAULT;
-  flags &= ~(MAX_RUDDER_FAULT);
+//  rudderSense = -3000; // Indicate starboard limit
+ // flags |= MIN_RUDDER_FAULT;
+ // flags &= ~(MAX_RUDDER_FAULT);
   Serial.println("Starboard overCurrent");
 }
 
@@ -494,8 +496,8 @@ void loop() {
   }
 
   // Read current sense (12-bit ADC)
-  int currentSenseRaw = analogRead(IS_PINS);
-  currentAmps = floatMap(currentSenseRaw, 0, 4095, 0, 4300); // Map to 0–43A (10mA units) 
+   currentSenseRaw = analogRead(IS_PINS);
+  currentAmps = floatMap(currentSenseRaw, 0, 4095, 0, 8500); // Map to 0–43A (10mA units) Still need to check this
 
   // Update rolling average
   currentAmpsHistory[currentAmpsIndex] = currentAmps;
