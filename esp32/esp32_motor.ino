@@ -19,7 +19,7 @@
 #include <Arduino.h>
 #include <HardwareSerial.h> // ESP32-specific serial library
 #include "crc.h" // Original crc.h for CRC calculations
-#include <Arduino.h>
+
 
 
 // Pin definitions for ESP32
