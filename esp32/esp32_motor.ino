@@ -1,5 +1,5 @@
 /*
- * Ported to use ITB-2 in language I can understand. 
+ * Ported to use ITB-2 and ESP32 in language I can understand. 
  * contact: Marc flydr2@gmail.com
  * There is room for improvement. 
  * 
