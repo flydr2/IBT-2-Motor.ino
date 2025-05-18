@@ -1,14 +1,36 @@
+/*
+ * Ported to use ITB-2 in language I can understand. 
+ * contact: Marc flydr2@gmail.com
+ * There is room for improvement. 
+ * 
+ * !!!!!! Use at your own risk !!!!!
+ * 
+ * There are 3 versions (that I know about) of the IBT-2.
+   The difference is the IS pins output... Be sure never to send over 3.3v to the IS_PINS 34 
+
+ * The adjustments in pypilot can be made to use the max amp as a limit stop... 
+ * I intend to make an other version which will have a backup pilot built-in and managed from wifi AP mode in the esp32
+ * 
+ * Ported partially (To my needs not everything is ported. (Enough for my needs)
+ * Limit current, limit switches, Slew, and some faults work... 
+ * If anyone improves it... Please send me a link to your version.
+ */
+
 #include <Arduino.h>
 #include <HardwareSerial.h> // ESP32-specific serial library
 #include "crc.h" // Original crc.h for CRC calculations
+#include <Arduino.h>
+
 
 // Pin definitions for ESP32
 #define RPWM 25  // PWM pin for right (starboard) motor direction
 #define LPWM 26  // PWM pin for left (port) motor direction
 #define REN  27  // Enable pin for motor driver (REN and LEN tied together)
-#define IS_PINS 34 // Analog input for current sensing (ADC1_6)
+#define IS_PINS 34 // Analog input for current sensing (ADC1_6) Wire the 2 IS pins together to a 680Ω resistor to ground for a 0–3.3V (1k for 5v) acts as a voltage divider
 #define Port_Switch_pin 32 // Rudder limit switch (port)
 #define Starboard_Switch_pin 33 // Rudder limit switch (starboard)
+
+//I will have extra defines for the selfcontained autopilot here later.
 
 // PWM settings for ESP32
 #define PWM_FREQ 10000   // PWM frequency (Hz)
@@ -49,8 +71,8 @@ HardwareSerial SerialPypilot(2); // Use UART2
 #define PORT_PIN_FAULT 32
 #define STARBOARD_PIN_FAULT 64
 #define BADVOLTAGE 128
-#define MIN_RUDDER 256
-#define MAX_RUDDER 512
+#define MIN_RUDDER_FAULT 256
+#define MAX_RUDDER_FAULT 512
 #define CURRENT_RANGE 1024
 #define BAD_FUSES 2048
 #define REBOOTED 32768
@@ -65,8 +87,9 @@ int maxMotorTemp = 100;
 int maxSlewRate = 20;
 int max_slew_slow = 20;
 bool motorEngaged = false;
-bool debugMode = true; // Enable for debugging
-uint16_t flags = SYNC | REBOOTED;
+bool debugMode = false; // Enable for debugging
+
+uint16_t flags = SYNC;
 bool isSynced = true;
 int port_starboard_direction;
 int starboard_overcurrent = 0;
@@ -93,31 +116,6 @@ void debugLog(const char* message) {
   }
 }
 
-void stop_port() {
-  stopMotor();
-  port_overcurrent = 1;
-  rudderSense = 3000; // Indicate port limit
-  flags |= PORT_PIN_FAULT | MIN_RUDDER;
-  Serial.println("Port overCurrent");
-}
-
-void stop_starboard() {
-  stopMotor();
-  starboard_overcurrent = 1;
-  rudderSense = -3000; // Indicate starboard limit
-  flags |= STARBOARD_PIN_FAULT | MAX_RUDDER;
-  Serial.println("Starboard overCurrent");
-}
-
-void resetFaults() {
-  port_overcurrent = 0;
-  starboard_overcurrent = 0;
-  flags &= ~(OVERCURRENT_FAULT | PORT_PIN_FAULT | STARBOARD_PIN_FAULT | MIN_RUDDER | MAX_RUDDER);
-  if (debugMode) {
-    Serial.println("All faults have been reset.");
-  }
-}
-
 void stopMotor() {
   ledcWrite(RPWM, 0); // Use pin directly in v3.0
   ledcWrite(LPWM, 0);
@@ -125,6 +123,35 @@ void stopMotor() {
   motorEngaged = false;
   debugLog("Motor stopped");
 }
+
+void stop_port() {
+  stopMotor();
+  port_overcurrent = 1;
+  rudderSense = 3000; // Indicate port limit
+  flags |= MAX_RUDDER_FAULT;
+  flags &= ~(MIN_RUDDER_FAULT);
+  Serial.println("Port overCurrent");
+}
+
+void stop_starboard() {
+  stopMotor();
+  starboard_overcurrent = 1;
+  rudderSense = -3000; // Indicate starboard limit
+  flags |= MIN_RUDDER_FAULT;
+  flags &= ~(MAX_RUDDER_FAULT);
+  Serial.println("Starboard overCurrent");
+}
+
+void resetFaults() {
+  port_overcurrent = 0;
+  starboard_overcurrent = 0;
+  flags &= ~(OVERCURRENT_FAULT | PORT_PIN_FAULT | STARBOARD_PIN_FAULT | MIN_RUDDER_FAULT | MAX_RUDDER_FAULT);
+  if (debugMode) {
+    Serial.println("All faults have been reset.");
+  }
+}
+
+
 
 int calculateSlewRate(int targetSpeed, int lastSpeed, int maxSlewSpeed, int maxSlewSlow) {
   int speedDifference = targetSpeed - lastSpeed;
@@ -138,6 +165,8 @@ int calculateSlewRate(int targetSpeed, int lastSpeed, int maxSlewSpeed, int maxS
 
 void setMotorSpeed(int speed) {
   static int lastSpeed = 0;
+
+
   if ((speed == 1000) || (speed == 254)) {
     stopMotor();
     lastSpeed = 0;
@@ -161,12 +190,12 @@ void setMotorSpeed(int speed) {
     if (starboard_overcurrent == 0 && StarboardValue != LOW) {
       ledcWrite(RPWM, 0);
       ledcWrite(LPWM, targetSpeed);
-      if (debugMode) {
+     // if (debugMode) {
         Serial.print("Motor engaged, STARBOARD speed (0-255): ");
         Serial.println(targetSpeed);
         Serial.print("Max current: ");
         Serial.println(rollingAverageCurrent * 0.01, 2);
-      }
+     // }
     } else {
       stop_starboard();
     }
@@ -176,12 +205,12 @@ void setMotorSpeed(int speed) {
     if (port_overcurrent == 0 && PortValue != LOW) {
       ledcWrite(LPWM, 0);
       ledcWrite(RPWM, targetSpeed);
-      if (debugMode) {
+   //   if (debugMode) {
         Serial.print("Motor engaged, PORT speed (0-255): ");
         Serial.println(targetSpeed);
         Serial.print("Max current: ");
         Serial.println(rollingAverageCurrent * 0.01, 2);
-      }
+     // }
     } else {
       stop_port();
     }
@@ -240,12 +269,12 @@ void sendFeedback() {
   if (motorEngaged) {
     faultFlags |= ENGAGED;
   }
-  if (port_overcurrent || PortValue == LOW) {
-    faultFlags |= PORT_PIN_FAULT | MIN_RUDDER;
-  }
-  if (starboard_overcurrent || StarboardValue == LOW) {
-    faultFlags |= STARBOARD_PIN_FAULT | MAX_RUDDER;
-  }
+//  if (port_overcurrent || PortValue == LOW) {
+//    faultFlags |= MAX_RUDDER_FAULT;
+//  }
+//  if (starboard_overcurrent || StarboardValue == LOW) {
+//    faultFlags |= MIN_RUDDER_FAULT;
+//  }
   feedback[0] = FLAGS_CODE;
   feedback[1] = faultFlags & 0xFF;
   feedback[2] = (faultFlags >> 8) & 0xFF;
@@ -466,7 +495,7 @@ void loop() {
 
   // Read current sense (12-bit ADC)
   int currentSenseRaw = analogRead(IS_PINS);
-  currentAmps = floatMap(currentSenseRaw, 0, 4095, 0, 4300); // Map to 0–43A (10mA units)
+  currentAmps = floatMap(currentSenseRaw, 0, 4095, 0, 4300); // Map to 0–43A (10mA units) 
 
   // Update rolling average
   currentAmpsHistory[currentAmpsIndex] = currentAmps;
