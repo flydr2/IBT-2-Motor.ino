@@ -1,5 +1,6 @@
 # IBT-2-Motor.ino
-This is my motor.ino to work with Pypilot using IBT-2. USING Arduino MEGA... NOTE SERIAL PORT 1
+This is my motor.ino to work with Pypilot using IBT-2. USING Arduino MEGA... NOTE SERIAL PORT 1.
+
 There is also a version for ESP32 which will get improvements over time.
 
 After working days to analyse pypilot motor.ino I started this to replace it with this partial ino file.
