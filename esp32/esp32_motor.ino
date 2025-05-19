@@ -504,7 +504,7 @@ void loop() {
       
       if (debugMode) Serial.println("Flushed SerialPypilot due to excessive invalid CRCs");
       sendHandshake();
-      ESP.restart();
+      ESP.restart(); // reboots the esp when too many fails
     }
   }
 
